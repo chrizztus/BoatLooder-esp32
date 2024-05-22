@@ -146,94 +146,78 @@ void stepperControlTask(void *pvParameters) {
   }
 }
 
-// thrust control task
+// thrust control 
+void setupMotorPWM() {
 #ifdef DRIVER_POLULU_18V17
-void thrustControlTask(void *pvParameters) {
-  // pwm inits
   pinMode(MOTOR_DIR_PIN, OUTPUT);
   pinMode(MOTOR_PWM_PIN, OUTPUT);
   ledcAttachChannel(MOTOR_PWM_PIN, 20000, 9, 0);
   ledcWrite(MOTOR_PWM_PIN, 0);
-  thrustPinData.pulseDuration = 1500;
-
-  while (1) {
-    noInterrupts();
-    int motorPulse = thrustPinData.pulseDuration;
-    interrupts();
-
-    bool direction = motorPulse > PWM_MID;
-    digitalWrite(MOTOR_DIR_PIN, direction ? HIGH : LOW); // Set direction
-
-    // Map PWM value to speed range (0 - 255)
-    int speed;
-    if (direction) {
-      // CCW Rotation
-      speed = map(motorPulse, PWM_MID, PWM_MAX, 0, 512);
-    } else {
-      // CW Rotation
-      speed = map(motorPulse, PWM_MID, PWM_MIN, 0, 512);
-    }
-    speed = constrain(speed, 0, 512); // Ensure speed stays within bounds
-
-    // MOTOR_DEADBAND
-    if(motorPulse > (PWM_MID - MOTOR_DEADBAND) && motorPulse < (PWM_MID + MOTOR_DEADBAND)){
-      speed = 0;
-    }
-    //Serial.printf("Pulse: %d\n", motorPulse);
-
-    ledcWrite(MOTOR_PWM_PIN, speed);
-    // sampling with 50Hz which correlates with pwm frequency of input signal 
-    vTaskDelay(pdMS_TO_TICKS(100));//20));
-  }
-}
 #elif defined(DRIVER_BTS7960)
-
-void thrustControlTask(void *pvParameters) {
   pinMode(MOTOR_EN_PIN, OUTPUT);
   pinMode(MOTOR_PWM1_PIN, OUTPUT);
   pinMode(MOTOR_PWM2_PIN, OUTPUT);
   
-  digitalWrite(MOTOR_EN_PIN,HIGH);
+  digitalWrite(MOTOR_EN_PIN, HIGH);
 
   ledcAttachChannel(MOTOR_PWM1_PIN, 20000, 9, 0);
   ledcAttachChannel(MOTOR_PWM2_PIN, 20000, 9, 1);
   ledcWrite(MOTOR_PWM2_PIN, 0);
+#endif
+}
+
+void setMotorSpeed(int motorPulse) {
+  bool direction = motorPulse > PWM_MID;
+  int speed;
   
+#ifdef DRIVER_POLULU_18V17
+  digitalWrite(MOTOR_DIR_PIN, direction ? HIGH : LOW);
+  if (direction) {
+    speed = map(motorPulse, PWM_MID, PWM_MAX, 0, 512);
+  } else {
+    speed = map(motorPulse, PWM_MID, PWM_MIN, 0, 512);
+  }
+  speed = constrain(speed, 0, 512);
+  if (motorPulse > (PWM_MID - MOTOR_DEADBAND) && motorPulse < (PWM_MID + MOTOR_DEADBAND)) {
+    speed = 0;
+  }
+  ledcWrite(MOTOR_PWM_PIN, speed);
+#elif defined(DRIVER_BTS7960)
+  if (motorPulse > (PWM_MID + MOTOR_DEADBAND)) {
+    ledcWrite(MOTOR_PWM1_PIN, 0);
+    speed = map(motorPulse, PWM_MID, PWM_MAX, 0, 512);
+    speed = constrain(speed, 0, 512);
+    ledcWrite(MOTOR_PWM2_PIN, speed);
+  } else if (motorPulse < (PWM_MID - MOTOR_DEADBAND)) {
+    ledcWrite(MOTOR_PWM2_PIN, 0);
+    speed = map(motorPulse, PWM_MID, PWM_MIN, 0, 512);
+    speed = constrain(speed, 0, 512);
+    ledcWrite(MOTOR_PWM1_PIN, speed);
+  } else {
+    ledcWrite(MOTOR_PWM1_PIN, 0);
+    ledcWrite(MOTOR_PWM2_PIN, 0);
+  }
+#endif
+}
+
+void thrustControlTask(void *pvParameters) {
+  int lastPulseDurationUs = 1500;
   thrustPinData.pulseDuration = 1500;
+  setupMotorPWM();
 
   while (1) {
     noInterrupts();
     int motorPulse = thrustPinData.pulseDuration;
     interrupts();
 
-    bool direction = motorPulse > PWM_MID;
+    if(motorPulse != lastPulseDurationUs){
+      setMotorSpeed(motorPulse);
+      lastPulseDurationUs = motorPulse;
+    }
 
-    // Map PWM value to speed range (0 - 255)
-    int speed;
-    if (motorPulse > (PWM_MID + MOTOR_DEADBAND)) {
-      // CCW Rotation
-      ledcWrite(MOTOR_PWM1_PIN, 0);
-      speed = map(motorPulse, PWM_MID, PWM_MAX, 0, 512);
-      speed = constrain(speed, 0, 512); // Ensure speed stays within bounds
-      ledcWrite(MOTOR_PWM2_PIN, speed);
-    } else if(motorPulse < (PWM_MID - MOTOR_DEADBAND)) {
-      // CW Rotation 
-      ledcWrite(MOTOR_PWM2_PIN, 0);
-      speed = map(motorPulse, PWM_MID, PWM_MIN, 0, 512);
-      speed = constrain(speed, 0, 512); // Ensure speed stays within bounds
-      ledcWrite(MOTOR_PWM1_PIN, speed);
-    }
-    else {
-      // Within deadband, stop the motor
-        ledcWrite(MOTOR_PWM1_PIN, 0);
-        ledcWrite(MOTOR_PWM2_PIN, 0);
-    }
-    // sampling with 50Hz which correlates with pwm frequency of input signal 
-    vTaskDelay(pdMS_TO_TICKS(50)); //20
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
-    
 }
-#endif
 
 // Task function to toggle the LED
 void toggleLED(void *parameter) {
