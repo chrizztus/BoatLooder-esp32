@@ -4,6 +4,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "BluetoothHandler.h"
+#include "Mavlink.h"
 
 // TMC2225
 #define EN_PIN           23
@@ -47,22 +48,14 @@
 
 
 // rc settings
-#define TX_CHANNELS 5
-#define RC_TX_PIN 14
-#define RC_RX_PIN 27
+#define RC_CHANNELS 5
 
-//#define USE_SBUS
-#ifdef USE_SBUS
-#include "sbus.h"
-#else
-#include "Ppm.h"
-#endif
+#define MAVLINK_UART 1
+ 
+// Commonly, the built-in LED is on GPIO 2 for ESP32 DevKit boards
+#define LED_PIN 2
 
-//#define UART_STEPPER_TEST_MODE 
-
-const int ledPin = 2; // Commonly, the built-in LED is on GPIO 2 for ESP32 DevKit boards
-const int thrustPwmPin = 13; // PWM Input Pin
-const int stepperPwmPin = 12; // PWM Input Pin
+// GLOBALS
 
 // Stepper driver initialization
 TMC2208Stepper driver = TMC2208Stepper(&TMC_SERIAL_PORT, R_SENSE);
@@ -71,73 +64,34 @@ AccelStepper stepper = AccelStepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
 // Bluetooth initialization
 BluetoothHandler btHandler;
 
-#ifdef USE_SBUS
-#include "sbus.h"
-bfs::SbusTx sbusTx(&Serial1, RC_RX_PIN, RC_TX_PIN, true);
-bfs::SbusData sbusData;
-#else
-Ppm ppm(TX_CHANNELS, RC_TX_PIN);
-#endif
-
+// Mavlink initialization
+Mavlink mavlink(RC_CHANNELS, MAVLINK_UART); 
 
 // function prototypes
-void rcTransmit(const int* channels);
 int pwmToSteps(int pwm);
 void onBluetoothWrite(const uint8_t* data, size_t length);
 void onBluetoothConnect();
 void onBluetoothDisconnect();
 
-// PWM input pin definition
-struct PwmPinData {
-  volatile unsigned long lastRisingEdgeTime = 0;
-  volatile unsigned long pulseDuration = 0;
-  uint8_t pin;
-  
-  PwmPinData(uint8_t pin): pin(pin) {}
-};
-
-volatile PwmPinData thrustPinData(thrustPwmPin); // Initialize pwm pin data for the thrust input
-volatile PwmPinData stepperPinData(stepperPwmPin); // Initialize pwm pin data for the stepper input
-
-// INTERRUPTS
-
-// thrust/rudder input pwm reading
-void IRAM_ATTR handlePwmInterrupt(void *arg) {
-  PwmPinData *pinData = static_cast<PwmPinData*>(arg);
-  unsigned long currentTime = micros(); // Current timestamp in microseconds
-  // measure duration of HIGH pulse
-  if (digitalRead(pinData->pin) == HIGH) { // If the current edge is rising
-    pinData->lastRisingEdgeTime = currentTime; // Update the last rising edge timestamp
-  } else { // Falling edge
-    if (pinData->lastRisingEdgeTime  > 0) { // Ensure there was a previous rising edge
-      pinData->pulseDuration = currentTime - pinData->lastRisingEdgeTime; // Calculate the pulse duration
-      pinData->lastRisingEdgeTime = 0; // Reset the rising edge timestamp
-    }
-  }
-}
-
 // TASKS
 
 //  stepper driver control task
 void stepperControlTask(void *pvParameters) {
-  int oldPulse = 1500;
+  uint16_t lastStepperPulseUs = 1500;
   //int target = 0;
   unsigned long lastUpdate = 0;
 
-  stepperPinData.pulseDuration = 1500;
   while (1) {
-    //if (stepper.distanceToGo() == 0) {
-    noInterrupts();
-    int stepperPulse = stepperPinData.pulseDuration;
-    interrupts();
+    
+    uint16_t stepperPulseUs = mavlink.getSteeringPulseUs();
 
-    if (abs(stepperPulse - oldPulse) > STEPPER_DEAD_BAND) { //&&
-            //(abs(stepperPulse - PWM_MID) > STEPPER_MID_DEAD_BAND)) {
-            int target = pwmToSteps(stepperPinData.pulseDuration);
-            stepper.moveTo(target);  // Move stepper to the new target
-            oldPulse = stepperPulse;  // Update the old target
+    if( (stepperPulseUs != lastStepperPulseUs) &&
+        abs(stepperPulseUs - lastStepperPulseUs) > STEPPER_DEAD_BAND ) { 
+          int target = pwmToSteps(stepperPulseUs);
+          stepper.moveTo(target);  // Move stepper to the new target
+          lastStepperPulseUs = stepperPulseUs;  // Update the old target
     }
-    // Continuously run the stepper to hit target
+     // Continuously run the stepper to hit target
     stepper.run();
     // taskYield immediately gives away control to anoter task with same or
     // higher priority but task must be on same priority as idle task to not 
@@ -201,33 +155,37 @@ void setMotorSpeed(int motorPulse) {
 }
 
 void thrustControlTask(void *pvParameters) {
-  int lastPulseDurationUs = 1500;
-  thrustPinData.pulseDuration = 1500;
+  int lastThrustPulseUs = 1500;
   setupMotorPWM();
 
   while (1) {
-    noInterrupts();
-    int motorPulse = thrustPinData.pulseDuration;
-    interrupts();
+    int thrustPulseUs = mavlink.getThrottlePulseUs();
 
-    if(motorPulse != lastPulseDurationUs){
-      setMotorSpeed(motorPulse);
-      lastPulseDurationUs = motorPulse;
+    if(thrustPulseUs != lastThrustPulseUs){
+      setMotorSpeed(thrustPulseUs);
+      lastThrustPulseUs = thrustPulseUs;
     }
 
     vTaskDelay(pdMS_TO_TICKS(50));
   }
 }
 
+void processMavlinkTask(void *pvParameters) {
+  while (1) {
+    mavlink.processReceivedPacket();
+    vTaskDelay(pdMS_TO_TICKS(50)); // Wait for 50 milliseconds
+  }
+}
+
 // Task function to toggle the LED
 void toggleLED(void *parameter) {
-  pinMode(ledPin, OUTPUT); // Set the LED pin as an output
+  pinMode(LED_PIN, OUTPUT); // Set the LED pin as an output
 
   while (1) {
-    digitalWrite(ledPin, HIGH); // Toggle the LED
-    vTaskDelay(pdMS_TO_TICKS(1000)); // Wait for 500 milliseconds
-    digitalWrite(ledPin, LOW); // Toggle the LED
-    vTaskDelay(pdMS_TO_TICKS(200)); // Wait for 500 milliseconds
+    digitalWrite(LED_PIN, HIGH); // Toggle the LED
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    digitalWrite(LED_PIN, LOW); // Toggle the LED
+    vTaskDelay(pdMS_TO_TICKS(200));
   }
 }
 
@@ -236,11 +194,8 @@ void setup() {
   while(!Serial);
   Serial.println("\nstart...");
 
-  // init interrupts for pwm input
-  pinMode(thrustPinData.pin, INPUT);
-  pinMode(stepperPinData.pin, INPUT);
-  attachInterruptArg(digitalPinToInterrupt(thrustPinData.pin), handlePwmInterrupt, const_cast<void*>(reinterpret_cast<const volatile void*>(&thrustPinData)), CHANGE);
-  attachInterruptArg(digitalPinToInterrupt(stepperPinData.pin), handlePwmInterrupt, const_cast<void*>(reinterpret_cast<const volatile void*>(&stepperPinData)), CHANGE);
+  // init mavlink
+  mavlink.init();
 
   // stepper driver initialization
   TMC_SERIAL_PORT.begin(115200, SERIAL_8N1, 16, 17);
@@ -260,29 +215,18 @@ void setup() {
   stepper.disableOutputs();
 
   // task init
-  xTaskCreate(toggleLED, "Toggle LED", 1024, NULL, 1, NULL);
- 
+  xTaskCreatePinnedToCore(toggleLED, "Toggle LED", 1024, NULL, 1, NULL, 0);
   // in order to achieve fast updates stepper control task runs at priority 0 with idle task
   // using taskYield in tasks with higher priority would starve the idle task and trigger the watchdog timeout
-  xTaskCreate(stepperControlTask, "Control Stepper", 4096, NULL, 0, NULL);
-  xTaskCreate(thrustControlTask, "Control Thrust Motor", 4096, NULL, 1, NULL);
-  //xTaskCreate(readAnalogTask, "PPM generator", 4096, NULL, 1, NULL);
-  //xTaskCreate(readPwmTask, "Read PWM", 1024, NULL, 1, NULL);
-#ifdef UART_STEPPER_TEST_MODE
-  xTaskCreate(readSerialTask, "Read PWM", 1024, NULL, 1, NULL);
-#endif
+  xTaskCreatePinnedToCore(stepperControlTask, "Control Stepper", 4096, NULL, 0, NULL, 1); // give stepper single core
+  xTaskCreatePinnedToCore(thrustControlTask, "Control Thrust Motor", 4096, NULL, 1, NULL, 0);
+  xTaskCreatePinnedToCore(processMavlinkTask, "Process Mavlink", 4096, NULL, 1, NULL, 0);
 
   btHandler.init();  // Initialize Bluetooth
   // set bluetooth callbacks
   btHandler.setOnWriteCallback(onBluetoothWrite);
   btHandler.setOnConnectCallback(onBluetoothConnect);
   btHandler.setOnDisconnectCallback(onBluetoothDisconnect);
-
-#ifdef USE_SBUS
-  sbusTx.Begin();
-#else
-  ppm.init();
-#endif
 }
 
 void loop() {
@@ -294,14 +238,13 @@ void loop() {
 void onBluetoothWrite(const uint8_t* data, size_t length) {
     //Serial.printf("Received %d bytes via BLE\n", length);
     if(length == 8){
-      int channel5 = data[0] << 8 | data [1];
-      int channel1 = data[2] << 8 | data [3]; // roll
-      int channel3 = data[4] << 8 | data [5]; // gier
-      int channel4 = data[6] << 8 | data [7]; // arm
-      int pulses[TX_CHANNELS] = {channel1,1500,channel3,channel4,channel5};
+      uint16_t channel5 = data[0] << 8 | data [1];
+      uint16_t channel1 = data[2] << 8 | data [3]; // roll
+      uint16_t channel3 = data[4] << 8 | data [5]; // gier
+      uint16_t channel4 = data[6] << 8 | data [7]; // arm
+      uint16_t pulses[RC_CHANNELS] = {channel1,1500,channel3,channel4,channel5};
       //Serial.printf("1: %d\t3: %d\t4: %d\t5: %d\n", channel1, channel3,channel4, channel5);
-      rcTransmit((const int *) pulses);
-      //ppm.updateChannelPulses(pulses);
+      mavlink.sendRcOverrides((const uint16_t *) pulses);
     }
 }
 
@@ -312,9 +255,9 @@ void onBluetoothConnect() {
 
 void onBluetoothDisconnect() {
     Serial.println("BLE device disconnected");
-    const int ppmPulses[TX_CHANNELS] = {800, 800, 800, 800, 800};
-    rcTransmit(ppmPulses);
-    //ppm.updateChannelPulses(ppmPulses);
+    const uint16_t pulses[RC_CHANNELS] = {800, 800, 800, 800, 800};
+    mavlink.sendRcOverrides((const uint16_t *) pulses);
+
     stepper.disableOutputs();
 #ifdef DRIVER_POLULU_18V17
   ledcWrite(MOTOR_PWM_PIN, 0);
@@ -337,50 +280,6 @@ int pwmToSteps(int pwmValue) {
     
     return steps;
 }
-
-void rcTransmit(const int* channels){
-#ifdef USE_SBUS
-  for(int i = 0; i < TX_CHANNELS; ++i){
-    sbusData.ch[i] = map(channels[i], 800, 2200, 0, 2047);
-  }
-  sbusTx.Write();
-#else
-  ppm.updateChannelPulses(channels);
-#endif
-}
-
-#ifdef UART_STEPPER_TEST_MODE
-// uart test mode
-void readSerialTask(void *pvParameters) {
-    static char serialBuffer[8]; // Adjusted buffer size to 8
-    int index = 0;
-
-    while (1) {
-        if (Serial.available() > 0) {
-            char receivedChar = Serial.read();
-            
-            // Check for newline character, which indicates the end of the input
-            if (receivedChar == '\n' || receivedChar == '\r') {
-                serialBuffer[index] = '\0'; // Null-terminate the string
-                index = 0; // Reset index for the next message
-                
-                // Convert the received string to an integer
-                stepperPinData.pulseDuration = atoi(serialBuffer);
-                stepperPinData.pulseDuration = constrain(stepperPinData.pulseDuration, 1100, 1900);
-            } else {
-                // Add received character to buffer if it's not a newline
-                // Ensure there's space for the null terminator
-                if (index < sizeof(serialBuffer) - 1) {
-                    serialBuffer[index++] = receivedChar;
-                }
-            }
-        }
-        
-        // Add a small delay to prevent the task from using all CPU time
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-}
-#endif
 
 // currently unused
 // read analog channels and provide them to ppm timer interrupt
