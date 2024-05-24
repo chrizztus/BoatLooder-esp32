@@ -48,7 +48,7 @@
 
 
 // rc settings
-#define RC_CHANNELS 5
+#define NUM_RC_CHANNELS 5
 
 #define MAVLINK_UART 1
  
@@ -65,7 +65,8 @@ AccelStepper stepper = AccelStepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
 BluetoothHandler btHandler;
 
 // Mavlink initialization
-Mavlink mavlink(RC_CHANNELS, MAVLINK_UART); 
+Mavlink mavlink(NUM_RC_CHANNELS, MAVLINK_UART);
+uint16_t rcChannels[NUM_RC_CHANNELS];
 
 // function prototypes
 int pwmToSteps(int pwm);
@@ -173,6 +174,7 @@ void thrustControlTask(void *pvParameters) {
 void processMavlinkTask(void *pvParameters) {
   while (1) {
     mavlink.processReceivedPacket();
+    mavlink.sendRcOverrides((const uint16_t *) rcChannels);
     vTaskDelay(pdMS_TO_TICKS(50)); // Wait for 50 milliseconds
   }
 }
@@ -196,6 +198,7 @@ void setup() {
 
   // init mavlink
   mavlink.init();
+  initRcChannels();
 
   // stepper driver initialization
   TMC_SERIAL_PORT.begin(115200, SERIAL_8N1, 16, 17);
@@ -238,13 +241,11 @@ void loop() {
 void onBluetoothWrite(const uint8_t* data, size_t length) {
     //Serial.printf("Received %d bytes via BLE\n", length);
     if(length == 8){
-      uint16_t channel5 = data[0] << 8 | data [1];
-      uint16_t channel1 = data[2] << 8 | data [3]; // roll
-      uint16_t channel3 = data[4] << 8 | data [5]; // gier
-      uint16_t channel4 = data[6] << 8 | data [7]; // arm
-      uint16_t pulses[RC_CHANNELS] = {channel1,1500,channel3,channel4,channel5};
-      //Serial.printf("1: %d\t3: %d\t4: %d\t5: %d\n", channel1, channel3,channel4, channel5);
-      mavlink.sendRcOverrides((const uint16_t *) pulses);
+      rcChannels[0] = data[2] << 8 | data[3]; // channel1 (roll)
+      rcChannels[1] = 1500;                   // constant value (pitch)
+      rcChannels[2] = data[4] << 8 | data[5]; // channel3 (throttle)
+      rcChannels[3] = data[6] << 8 | data[7]; // channel4 (arm/disarm)
+      rcChannels[4] = data[0] << 8 | data[1]; // channel5 (mode)
     }
 }
 
@@ -255,9 +256,8 @@ void onBluetoothConnect() {
 
 void onBluetoothDisconnect() {
     Serial.println("BLE device disconnected");
-    const uint16_t pulses[RC_CHANNELS] = {800, 800, 800, 800, 800};
-    mavlink.sendRcOverrides((const uint16_t *) pulses);
 
+    initRcChannels(); //set all channels to < 900us to trigger failsage
     stepper.disableOutputs();
 #ifdef DRIVER_POLULU_18V17
   ledcWrite(MOTOR_PWM_PIN, 0);
@@ -279,6 +279,14 @@ int pwmToSteps(int pwmValue) {
     int steps = round(normalizedPWM * STEPS_FOR_90_DEGREES);
     
     return steps;
+}
+
+void initRcChannels(){
+  for (int i = 0; i < NUM_RC_CHANNELS; i++) {
+    rcChannels[i] = 1500;
+  }
+  rcChannels[3] = 1100; //disarmed
+  rcChannels[4] = 1100; //manual mode
 }
 
 // currently unused
