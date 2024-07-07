@@ -14,7 +14,9 @@
 #define STEP_PIN         18
 
 #define MOTOR_ANGLE_PER_STEP 1.8f
-#define MOTOR_GEAR_RATIO 4
+#define DRIVE_TEETH 16
+#define OUTPUT_TEETH 96
+#define MOTOR_GEAR_RATIO (int)(OUTPUT_TEETH / DRIVE_TEETH)
 #define MICROSTEPS       4
 
 #define ROTATION_ANGLE_MAX 90.0
@@ -172,22 +174,41 @@ void thrustControlTask(void *pvParameters) {
 }
 
 void processMavlinkTask(void *pvParameters) {
+  bool deviceConnected = false; // Track if the opposite heartbeat device is connected
+
   while (1) {
-    mavlink.processReceivedPacket();
-    mavlink.sendRcOverrides((const uint16_t *) rcChannels);
+    mavlink.processReceivedPackets();
+
+    if (mavlink.haveHeartbeat()) {
+      if (!deviceConnected) {
+        // Device connected for the first time or after a loss
+        mavlink.setupStreamingRates();
+        deviceConnected = true;
+      }
+      // Send RC overrides since the device is connected
+      mavlink.sendRcOverrides((const uint16_t *) rcChannels);
+    } else {
+      // Device disconnected, set flag to false
+      deviceConnected = false;
+    }
+
     vTaskDelay(pdMS_TO_TICKS(50)); // Wait for 50 milliseconds
   }
 }
 
 // Task function to toggle the LED
-void toggleLED(void *parameter) {
+void statusLedTask(void *parameter) {
   pinMode(LED_PIN, OUTPUT); // Set the LED pin as an output
 
   while (1) {
-    digitalWrite(LED_PIN, HIGH); // Toggle the LED
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    digitalWrite(LED_PIN, LOW); // Toggle the LED
-    vTaskDelay(pdMS_TO_TICKS(200));
+    if (mavlink.haveHeartbeat()) {
+      digitalWrite(LED_PIN, HIGH); // Keep the LED on
+    } else {
+      static int ledState = HIGH;
+      digitalWrite(LED_PIN, ledState);
+      ledState = !ledState;
+    }
+    vTaskDelay(pdMS_TO_TICKS(500)); // Delay for half a second
   }
 }
 
@@ -218,7 +239,7 @@ void setup() {
   stepper.disableOutputs();
 
   // task init
-  xTaskCreatePinnedToCore(toggleLED, "Toggle LED", 1024, NULL, 1, NULL, 0);
+  xTaskCreatePinnedToCore(statusLedTask, "LED Status", 1024, NULL, 1, NULL, 0);
   // in order to achieve fast updates stepper control task runs at priority 0 with idle task
   // using taskYield in tasks with higher priority would starve the idle task and trigger the watchdog timeout
   xTaskCreatePinnedToCore(stepperControlTask, "Control Stepper", 4096, NULL, 0, NULL, 1); // give stepper single core

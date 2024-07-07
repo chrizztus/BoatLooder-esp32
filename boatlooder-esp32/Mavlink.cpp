@@ -6,7 +6,6 @@
 void Mavlink::init(){
   _mavSerial.begin(MAVLINK_UART_BAUDRATE, SERIAL_8N1, MAVLINK_UART_RX, MAVLINK_UART_TX);
 
-  // Attach interrupt to the UART RX pin
   _servoOutSteering = 1500;
   _servoOutThrottle = 1500;
 
@@ -16,12 +15,46 @@ void Mavlink::init(){
     _rcChannelPulses[i] = 800;
   }
 
-  // // set streaming rates
-  requestMessageInterval(MAVLINK_MSG_ID_SERVO_OUTPUT_RAW, HZ_TO_US(MAVLINK_SERVO_OUTPUT_RAW_INTERVAL_HZ));
-  requestMessageInterval(MAVLINK_MSG_ID_HEARTBEAT, HZ_TO_US(MAVLINK_HEARTBEAT_INTERVAL_HZ));
-  requestMessageInterval(65, -1);
   Serial.println("Mavlink initilized.");
 }
+
+void Mavlink::setupStreamingRates(){
+  // Setup streaming rates for specific messages
+  requestMessageInterval(MAVLINK_MSG_ID_SERVO_OUTPUT_RAW, HZ_TO_US(MAVLINK_SERVO_OUTPUT_RAW_INTERVAL_HZ));
+  delay(100);
+  requestMessageInterval(MAVLINK_MSG_ID_HEARTBEAT, HZ_TO_US(MAVLINK_HEARTBEAT_INTERVAL_HZ));
+  delay(100);
+
+  // List of message IDs to disable
+  const uint8_t disableMessages[] = {
+    MAVLINK_MSG_ID_RC_CHANNELS,         // 65
+    MAVLINK_MSG_ID_VFR_HUD,             // 74
+    MAVLINK_MSG_ID_POWER_STATUS,        // 125
+    MAVLINK_MSG_ID_SCALED_PRESSURE,     // 29
+    MAVLINK_MSG_ID_GPS_GLOBAL_ORIGIN,   // 49
+    MAVLINK_MSG_ID_GPS_RAW_INT,         // 24
+    MAVLINK_MSG_ID_RAW_IMU,             // 27
+    MAVLINK_MSG_ID_STATUSTEXT,          // 253
+    MAVLINK_MSG_ID_HOME_POSITION,       // 242
+    MAVLINK_MSG_ID_ATTITUDE,            // 30
+    MAVLINK_MSG_ID_SYS_STATUS,          // 1
+    MAVLINK_MSG_ID_BATTERY_STATUS,      // 147
+    MAVLINK_MSG_ID_VIBRATION,           // 241
+    MAVLINK_MSG_ID_LOCAL_POSITION_NED,  // 32
+    MAVLINK_MSG_ID_SYSTEM_TIME,         // 2
+    MAVLINK_MSG_ID_RC_CHANNELS_SCALED,  // 34
+    MAVLINK_MSG_ID_MISSION_CURRENT,     // 42
+    MAVLINK_MSG_ID_TIMESYNC,            // 111
+    MAVLINK_MSG_ID_GLOBAL_POSITION_INT  // 33
+  };
+
+  // Iterate over the list and disable each message by setting its interval to -1
+  for (uint8_t i = 0; i < sizeof(disableMessages) / sizeof(disableMessages[0]); ++i) {
+    requestMessageInterval(disableMessages[i], -1);
+    delay(100);
+  }
+}
+
 
 void Mavlink::sendRcOverrides(const uint16_t *pulses){
     mavlink_message_t msg;
@@ -56,10 +89,10 @@ uint16_t Mavlink::getSteeringPulseUs(void){
 
 bool Mavlink::haveHeartbeat(void){
   unsigned long now = millis(); 
-  return (now - _lastHeartbeat) < MAVLINK_HEARTBEAT_TIMEOUT_MS;
+  return (_lastHeartbeat != 0) && (now - _lastHeartbeat) < MAVLINK_HEARTBEAT_TIMEOUT_MS;
 }
 
-void Mavlink::processReceivedPacket() {
+void Mavlink::processReceivedPackets() {
     while (_mavSerial.available()) {
          handleReceivedByte(_mavSerial.read());
     }

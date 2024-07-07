@@ -38,10 +38,11 @@ private:
 public:
     Mavlink(uint8_t numChannels, uint8_t mavUart) : _rcChannels(numChannels), _mavSerial(mavUart) {}
     void init();
+    void setupStreamingRates();
     void sendRcOverrides(const uint16_t* pulses);
     uint16_t getThrottlePulseUs(void);
     uint16_t getSteeringPulseUs(void);
     bool haveHeartbeat(void);
-    void processReceivedPacket();
+    void processReceivedPackets();
 };
 
