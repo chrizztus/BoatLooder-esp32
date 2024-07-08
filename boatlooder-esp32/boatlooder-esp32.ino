@@ -5,6 +5,7 @@
 #include <freertos/task.h>
 #include "BluetoothHandler.h"
 #include "Mavlink.h"
+#include "Logger.h"
 
 // TMC2225
 #define EN_PIN           23
@@ -213,9 +214,10 @@ void statusLedTask(void *parameter) {
 }
 
 void setup() {
+  // initialize serial for logger
   Serial.begin(115200);
   while(!Serial);
-  Serial.println("\nstart...");
+  LOG_INFO("\nstart...");
 
   // init mavlink
   mavlink.init();
@@ -260,7 +262,7 @@ void loop() {
 ///////////////// CALLBACKS /////////////////
 
 void onBluetoothWrite(const uint8_t* data, size_t length) {
-    //Serial.printf("Received %d bytes via BLE\n", length);
+    //LOG_DEBUGF("Received %d bytes via BLE\n", length);
     if(length == 8){
       rcChannels[0] = data[2] << 8 | data[3]; // channel1 (roll)
       rcChannels[1] = 1500;                   // constant value (pitch)
@@ -271,12 +273,12 @@ void onBluetoothWrite(const uint8_t* data, size_t length) {
 }
 
 void onBluetoothConnect() {
-    Serial.println("BLE device connected");
+    LOG_INFO("BLE device connected");
     stepper.enableOutputs();
 }
 
 void onBluetoothDisconnect() {
-    Serial.println("BLE device disconnected");
+    LOG_INFO("BLE device disconnected");
 
     initRcChannels(); //set all channels to < 900us to trigger failsage
     stepper.disableOutputs();
@@ -328,8 +330,6 @@ void initRcChannels(){
 //   while(1) {
 //     channelDefaults[0] = map(analogRead(THROTTLE_INPUT_PIN), 0, 4095, PPM_MIN, PPM_MAX);
 //     channelDefaults[1] = map(analogRead(RUDDER_INPUT_PIN), 0, 4095, PPM_MIN, PPM_MAX);
-//     // Serial.print("Channel 1: "); Serial.println(channelDefaults[0]);
-//     // Serial.print("Channel 2: "); Serial.println(channelDefaults[1]);
 //     vTaskDelay(pdMS_TO_TICKS(500));
 //   }
 // }

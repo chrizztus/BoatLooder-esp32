@@ -1,4 +1,5 @@
 #include "BluetoothHandler.h"
+#include "Logger.h"
 
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
@@ -40,7 +41,7 @@ public:
 BluetoothHandler::BluetoothHandler() {}
 
 void BluetoothHandler::init() {
-    Serial.println("BT HANLDER INIT :: START");
+    LOG_INFO("BT HANLDER INIT :: START");
     BLEDevice::init(DEVICE_NAME);
     BLEServer *pServer = BLEDevice::createServer();
 
@@ -61,24 +62,24 @@ void BluetoothHandler::init() {
 
     BLEAdvertising *pAdvertising = pServer->getAdvertising();
     pAdvertising->start();
-    Serial.println("BT HANDLER INIT :: DONE");
+    LOG_INFO("BT HANDLER INIT :: DONE");
 
     this->_isConnected = false;
   }
 
 // Setter implementations
 void BluetoothHandler::setOnWriteCallback(OnWriteCallback callback) {
-    Serial.println("BT HANLDER WRITE CB");
+    LOG_DEBUG("BT HANLDER WRITE CB");
     this->_onWriteCallback = callback;
 }
 
 void BluetoothHandler::setOnConnectCallback(OnConnectCallback callback) {
-    Serial.println("BT HANLDER CONNECT CB");
+    LOG_DEBUG("BT HANLDER CONNECT CB");
     this->_onConnectCallback = callback;
 }
 
 void BluetoothHandler::setOnDisconnectCallback(OnDisconnectCallback callback) {
-    Serial.println("BT HANLDER DISCONNECT CB");
+    LOG_DEBUG("BT HANLDER DISCONNECT CB");
     this->_onDisconnectCallback = callback;
 }
 

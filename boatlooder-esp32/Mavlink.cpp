@@ -1,4 +1,5 @@
 #include "Mavlink.h"
+#include "Logger.h"
 
 #define HZ_TO_US(hz) (1000000 / (hz))
 
@@ -15,7 +16,7 @@ void Mavlink::init(){
     _rcChannelPulses[i] = 800;
   }
 
-  Serial.println("Mavlink initilized.");
+  LOG_INFO("Mavlink initilized.");
 }
 
 void Mavlink::setupStreamingRates(){
@@ -122,7 +123,7 @@ void Mavlink::requestMessageInterval(uint16_t message_id, uint32_t interval_us) 
 
 void Mavlink::handleReceivedByte(uint8_t byte) {
     if (mavlink_parse_char(MAVLINK_COMM_0, byte, &_msg, &_status)) {
-        Serial.printf("Received Message ID: %d\n", _msg.msgid);
+        LOG_DEBUGF("Received Message ID: %d\n", _msg.msgid);
         if (_msg.msgid == MAVLINK_MSG_ID_SERVO_OUTPUT_RAW) {
             mavlink_servo_output_raw_t servo_output;
             mavlink_msg_servo_output_raw_decode(&_msg, &servo_output);
