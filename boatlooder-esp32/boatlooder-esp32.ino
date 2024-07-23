@@ -8,27 +8,28 @@
 #include "Logger.h"
 
 // TMC2225
-#define EN_PIN           23
-#define DIR_PIN          5
-#define TMC_SERIAL_PORT  Serial2
-#define R_SENSE          0.11f
-#define STEP_PIN         18
+#define EN_PIN                     23
+#define DIR_PIN                    5
+#define TMC_SERIAL_PORT            Serial2
+#define R_SENSE                    0.11f
+#define STEP_PIN                   18
+#define CURRENT_MILLI_AMPS         1000
 
-#define MOTOR_ANGLE_PER_STEP 1.8f
-#define DRIVE_TEETH 16
-#define OUTPUT_TEETH 96
-#define MOTOR_GEAR_RATIO (int)(OUTPUT_TEETH / DRIVE_TEETH)
-#define MICROSTEPS       4
+#define MOTOR_ANGLE_PER_STEP       1.8f
+#define DRIVE_TEETH                16
+#define OUTPUT_TEETH               96
+#define MOTOR_GEAR_RATIO           (int)(OUTPUT_TEETH / DRIVE_TEETH)
+#define MICROSTEPS                 4
 
-#define ROTATION_ANGLE_MAX 90.0
-#define STEPPER_DEAD_BAND 15
-#define STEPPER_MID_DEAD_BAND 10
-#define STEPS_FOR_90_DEGREES (int)((ROTATION_ANGLE_MAX / MOTOR_ANGLE_PER_STEP) * MICROSTEPS * MOTOR_GEAR_RATIO)
+#define ROTATION_ANGLE_MAX         90.0
+#define STEPPER_DEAD_BAND          5
+#define STEPPER_MID_DEAD_BAND      10
+#define STEPS_FOR_90_DEGREES       (int)((ROTATION_ANGLE_MAX / MOTOR_ANGLE_PER_STEP) * MICROSTEPS * MOTOR_GEAR_RATIO)
 
 // general defines
-#define PWM_MID 1500
-#define PWM_MIN 1100
-#define PWM_MAX 1900
+#define PWM_MID                    1500
+#define PWM_MIN                    1100
+#define PWM_MAX                    1900
 
 // define motor driver
 //#define DRIVER_POLULU_18V17
@@ -36,27 +37,27 @@
 
 // motor driver pin defines
 #ifdef DRIVER_POLULU_18V17
-#define MOTOR_DIR_PIN 21
-#define MOTOR_PWM_PIN 19
+#define MOTOR_DIR_PIN              21
+#define MOTOR_PWM_PIN              19
 #elif defined(DRIVER_BTS7960)
-#define MOTOR_PWM1_PIN 21
-#define MOTOR_PWM2_PIN 22
-#define MOTOR_EN_PIN 19
+#define MOTOR_PWM1_PIN             21
+#define MOTOR_PWM2_PIN             22
+#define MOTOR_EN_PIN               19
 #endif
 //#define CURRENT_SENSE_PIN 34
 
-#define MOTOR_DEADBAND 20
-#define MOTOR_LOWER_BOUND (PWM_MID - MOTOR_DEADBAND)
-#define MOTOR_UPPER_BOUND (PWM_MID + MOTOR_DEADBAND)
+#define MOTOR_DEADBAND             20
+#define MOTOR_LOWER_BOUND          (PWM_MID - MOTOR_DEADBAND)
+#define MOTOR_UPPER_BOUND          (PWM_MID + MOTOR_DEADBAND)
 
 
 // rc settings
-#define NUM_RC_CHANNELS 5
+#define NUM_RC_CHANNELS            5
 
-#define MAVLINK_UART 1
+#define MAVLINK_UART               1
  
 // Commonly, the built-in LED is on GPIO 2 for ESP32 DevKit boards
-#define LED_PIN 2
+#define LED_PIN                    2
 
 // GLOBALS
 
@@ -84,6 +85,7 @@ void stepperControlTask(void *pvParameters) {
   uint16_t lastStepperPulseUs = 1500;
   //int target = 0;
   unsigned long lastUpdate = 0;
+  LOG_INFO("Stepper initialiazed");
 
   while (1) {
     
@@ -92,6 +94,7 @@ void stepperControlTask(void *pvParameters) {
     if( (stepperPulseUs != lastStepperPulseUs) &&
         abs(stepperPulseUs - lastStepperPulseUs) > STEPPER_DEAD_BAND ) { 
           int target = pwmToSteps(stepperPulseUs);
+          LOG_DEBUGF("Stepper pulse: %d\n", stepperPulseUs);
           stepper.moveTo(target);  // Move stepper to the new target
           lastStepperPulseUs = stepperPulseUs;  // Update the old target
     }
@@ -107,11 +110,13 @@ void stepperControlTask(void *pvParameters) {
 // thrust control 
 void setupMotorPWM() {
 #ifdef DRIVER_POLULU_18V17
+  LOG_INFO("Initializing pins for POLULU 18v17 Driver");
   pinMode(MOTOR_DIR_PIN, OUTPUT);
   pinMode(MOTOR_PWM_PIN, OUTPUT);
   ledcAttachChannel(MOTOR_PWM_PIN, 20000, 9, 0);
   ledcWrite(MOTOR_PWM_PIN, 0);
 #elif defined(DRIVER_BTS7960)
+  LOG_INFO("Initializing pins for BTS7960 Driver");
   pinMode(MOTOR_EN_PIN, OUTPUT);
   pinMode(MOTOR_PWM1_PIN, OUTPUT);
   pinMode(MOTOR_PWM2_PIN, OUTPUT);
@@ -140,6 +145,7 @@ void setMotorSpeed(int motorPulse) {
     speed = 0;
   }
   ledcWrite(MOTOR_PWM_PIN, speed);
+
 #elif defined(DRIVER_BTS7960)
   if (motorPulse > (PWM_MID + MOTOR_DEADBAND)) {
     ledcWrite(MOTOR_PWM1_PIN, 0);
@@ -164,6 +170,7 @@ void thrustControlTask(void *pvParameters) {
 
   while (1) {
     int thrustPulseUs = mavlink.getThrottlePulseUs();
+    //LOG_DEBUGF("Thrust: %d\n", thrustPulseUs);
 
     if(thrustPulseUs != lastThrustPulseUs){
       setMotorSpeed(thrustPulseUs);
@@ -185,6 +192,7 @@ void processMavlinkTask(void *pvParameters) {
         // Device connected for the first time or after a loss
         mavlink.setupStreamingRates();
         deviceConnected = true;
+        LOG_INFO("Received Mavlink Heartbeat");
       }
       // Send RC overrides since the device is connected
       mavlink.sendRcOverrides((const uint16_t *) rcChannels);
@@ -200,6 +208,8 @@ void processMavlinkTask(void *pvParameters) {
 // Task function to toggle the LED
 void statusLedTask(void *parameter) {
   pinMode(LED_PIN, OUTPUT); // Set the LED pin as an output
+  LOG_DEBUG("LED initialiazed");
+
 
   while (1) {
     if (mavlink.haveHeartbeat()) {
@@ -228,7 +238,7 @@ void setup() {
   while(!TMC_SERIAL_PORT);
   
   driver.begin();
-  driver.rms_current(800);
+  driver.rms_current(CURRENT_MILLI_AMPS);
   driver.microsteps(MICROSTEPS);
   driver.en_spreadCycle(false);
   driver.ihold(7);
@@ -244,7 +254,7 @@ void setup() {
   xTaskCreatePinnedToCore(statusLedTask, "LED Status", 1024, NULL, 1, NULL, 0);
   // in order to achieve fast updates stepper control task runs at priority 0 with idle task
   // using taskYield in tasks with higher priority would starve the idle task and trigger the watchdog timeout
-  xTaskCreatePinnedToCore(stepperControlTask, "Control Stepper", 4096, NULL, 0, NULL, 1); // give stepper single core
+  xTaskCreatePinnedToCore(stepperControlTask, "Control Stepper", 4096, NULL, 1, NULL, 1); // give stepper single core
   xTaskCreatePinnedToCore(thrustControlTask, "Control Thrust Motor", 4096, NULL, 1, NULL, 0);
   xTaskCreatePinnedToCore(processMavlinkTask, "Process Mavlink", 4096, NULL, 1, NULL, 0);
 
