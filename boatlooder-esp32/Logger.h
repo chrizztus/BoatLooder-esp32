@@ -11,7 +11,7 @@
 
 // Set the log level here
 #ifndef LOG_LEVEL
-#define LOG_LEVEL LOG_LEVEL_DEBUG
+#define LOG_LEVEL LOG_LEVEL_INFO
 #endif
 
 // Macro to print logs with a specific level
