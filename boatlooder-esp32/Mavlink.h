@@ -15,7 +15,7 @@
 
 #define MAVLINK_UART_BAUDRATE 921600
 #define MAVLINK_UART_RX 13
-#define MAVLINK_UART_TX 12
+#define MAVLINK_UART_TX 14
 
 class Mavlink {
 private:
