@@ -17,14 +17,14 @@
 
 #define MOTOR_ANGLE_PER_STEP       1.8f
 #define DRIVE_TEETH                16
-#define OUTPUT_TEETH               96
-#define MOTOR_GEAR_RATIO           (int)(OUTPUT_TEETH / DRIVE_TEETH)
+#define OUTPUT_TEETH               90
+#define MOTOR_GEAR_RATIO           ((float)OUTPUT_TEETH / (float)DRIVE_TEETH)
 #define MICROSTEPS                 4
 
-#define ROTATION_ANGLE_MAX         90.0
+#define ROTATION_ANGLE_MAX         90.0f
 #define STEPPER_DEAD_BAND          5
 #define STEPPER_MID_DEAD_BAND      10
-#define STEPS_FOR_90_DEGREES       (int)((ROTATION_ANGLE_MAX / MOTOR_ANGLE_PER_STEP) * MICROSTEPS * MOTOR_GEAR_RATIO)
+#define STEPS_FOR_90_DEGREES       ((int)(((ROTATION_ANGLE_MAX / MOTOR_ANGLE_PER_STEP) * MICROSTEPS * MOTOR_GEAR_RATIO) + 0.5f))
 
 // general defines
 #define PWM_MID                    1500
