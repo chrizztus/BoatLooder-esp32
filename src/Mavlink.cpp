@@ -20,38 +20,25 @@ void Mavlink::init(){
 }
 
 void Mavlink::setupStreamingRates(){
-  // Setup streaming rates for specific messages
-  requestMessageInterval(MAVLINK_MSG_ID_SERVO_OUTPUT_RAW, HZ_TO_US(MAVLINK_SERVO_OUTPUT_RAW_INTERVAL_HZ));
-  delay(100);
-  requestMessageInterval(MAVLINK_MSG_ID_HEARTBEAT, HZ_TO_US(MAVLINK_HEARTBEAT_INTERVAL_HZ));
-  delay(100);
-
-  // List of message IDs to disable
-  const uint8_t disableMessages[] = {
-    MAVLINK_MSG_ID_RC_CHANNELS,         // 65
-    MAVLINK_MSG_ID_VFR_HUD,             // 74
-    MAVLINK_MSG_ID_POWER_STATUS,        // 125
-    MAVLINK_MSG_ID_SCALED_PRESSURE,     // 29
-    MAVLINK_MSG_ID_GPS_GLOBAL_ORIGIN,   // 49
-    MAVLINK_MSG_ID_GPS_RAW_INT,         // 24
-    MAVLINK_MSG_ID_RAW_IMU,             // 27
-    MAVLINK_MSG_ID_STATUSTEXT,          // 253
-    MAVLINK_MSG_ID_HOME_POSITION,       // 242
-    MAVLINK_MSG_ID_ATTITUDE,            // 30
-    MAVLINK_MSG_ID_SYS_STATUS,          // 1
-    MAVLINK_MSG_ID_BATTERY_STATUS,      // 147
-    MAVLINK_MSG_ID_VIBRATION,           // 241
-    MAVLINK_MSG_ID_LOCAL_POSITION_NED,  // 32
-    MAVLINK_MSG_ID_SYSTEM_TIME,         // 2
-    MAVLINK_MSG_ID_RC_CHANNELS_SCALED,  // 34
-    MAVLINK_MSG_ID_MISSION_CURRENT,     // 42
-    MAVLINK_MSG_ID_TIMESYNC,            // 111
-    MAVLINK_MSG_ID_GLOBAL_POSITION_INT  // 33
+  // Setup streaming rates for specific messages.
+  // SERVO_OUTPUT_RAW drives the local control loop (getThrottlePulseUs /
+  // getSteeringPulseUs); everything else in this table is relayed to the app
+  // over the BLE telemetry characteristic. PARAM_VALUE is deliberately absent:
+  // it is response-driven, not a periodic stream.
+  struct { uint32_t msgId; uint32_t intervalUs; } streamedMessages[] = {
+    { MAVLINK_MSG_ID_SERVO_OUTPUT_RAW,    HZ_TO_US(MAVLINK_SERVO_OUTPUT_RAW_INTERVAL_HZ) },
+    { MAVLINK_MSG_ID_HEARTBEAT,           HZ_TO_US(MAVLINK_HEARTBEAT_INTERVAL_HZ) },
+    { MAVLINK_MSG_ID_VFR_HUD,             HZ_TO_US(MAVLINK_VFR_HUD_INTERVAL_HZ) },
+    { MAVLINK_MSG_ID_GPS_RAW_INT,         HZ_TO_US(MAVLINK_GPS_RAW_INT_INTERVAL_HZ) },
+    { MAVLINK_MSG_ID_SYS_STATUS,          HZ_TO_US(MAVLINK_SYS_STATUS_INTERVAL_HZ) },
+    { MAVLINK_MSG_ID_EKF_STATUS_REPORT,   HZ_TO_US(MAVLINK_EKF_STATUS_REPORT_INTERVAL_HZ) },
+    { MAVLINK_MSG_ID_GLOBAL_POSITION_INT, HZ_TO_US(MAVLINK_GLOBAL_POSITION_INT_INTERVAL_HZ) },
+    { MAVLINK_MSG_ID_VIBRATION,           MAVLINK_VIBRATION_INTERVAL_US },
+    { MAVLINK_MSG_ID_HOME_POSITION,       MAVLINK_HOME_POSITION_INTERVAL_US }
   };
 
-  // Iterate over the list and disable each message by setting its interval to -1
-  for (uint8_t i = 0; i < sizeof(disableMessages) / sizeof(disableMessages[0]); ++i) {
-    requestMessageInterval(disableMessages[i], -1);
+  for (uint8_t i = 0; i < sizeof(streamedMessages) / sizeof(streamedMessages[0]); ++i) {
+    requestMessageInterval(streamedMessages[i].msgId, streamedMessages[i].intervalUs);
     delay(100);
   }
 }
@@ -91,6 +78,14 @@ uint16_t Mavlink::getSteeringPulseUs(void){
 bool Mavlink::haveHeartbeat(void){
   unsigned long now = millis(); 
   return (_lastHeartbeat != 0) && (now - _lastHeartbeat) < MAVLINK_HEARTBEAT_TIMEOUT_MS;
+}
+
+void Mavlink::setOnTelemetryRelayCallback(OnRelayCallback callback) {
+    this->_onTelemetryRelayCallback = callback;
+}
+
+void Mavlink::setOnSettingsAckRelayCallback(OnRelayCallback callback) {
+    this->_onSettingsAckRelayCallback = callback;
 }
 
 void Mavlink::processReceivedPackets() {
@@ -135,6 +130,66 @@ void Mavlink::handleReceivedByte(uint8_t byte) {
         if (_msg.msgid == MAVLINK_MSG_ID_HEARTBEAT) {
             _lastHeartbeat = millis();
         }
+
+        // Relay is purely msgid-driven: the already-validated frame is re-serialized
+        // and forwarded verbatim, no per-message decode needed on this side.
+        RelayChannel channel = classifyRelay(_msg.msgid);
+        if (channel != RelayChannel::NONE) {
+            uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+            uint16_t len = mavlink_msg_to_send_buffer(buf, &_msg);
+            if (channel == RelayChannel::TELEMETRY && _onTelemetryRelayCallback) {
+                _onTelemetryRelayCallback(buf, len);
+            } else if (channel == RelayChannel::SETTINGS_ACK && _onSettingsAckRelayCallback) {
+                _onSettingsAckRelayCallback(buf, len);
+            }
+        }
+    }
+}
+
+// BLE settings writes come in on their own parser channel (MAVLINK_COMM_1) -- the
+// mavlink C library keys parser state by channel, so reusing MAVLINK_COMM_0 here
+// would corrupt both streams.
+void Mavlink::handleBleSettingsByte(uint8_t byte) {
+    if (mavlink_parse_char(MAVLINK_COMM_1, byte, &_bleMsg, &_bleStatus)) {
+        if (!isAllowedFromApp(_bleMsg.msgid)) {
+            LOG_WARNF("Dropped disallowed msgid %d from BLE settings channel\n", _bleMsg.msgid);
+            return;
+        }
+        uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+        uint16_t len = mavlink_msg_to_send_buffer(buf, &_bleMsg);
+        _mavSerial.write(buf, len);
+    }
+}
+
+RelayChannel Mavlink::classifyRelay(uint16_t msgid) {
+    switch (msgid) {
+        case MAVLINK_MSG_ID_HEARTBEAT:
+        case MAVLINK_MSG_ID_VFR_HUD:
+        case MAVLINK_MSG_ID_GPS_RAW_INT:
+        case MAVLINK_MSG_ID_SYS_STATUS:
+        case MAVLINK_MSG_ID_EKF_STATUS_REPORT:
+        case MAVLINK_MSG_ID_VIBRATION:
+        case MAVLINK_MSG_ID_GLOBAL_POSITION_INT:
+        case MAVLINK_MSG_ID_HOME_POSITION:
+            return RelayChannel::TELEMETRY;
+        case MAVLINK_MSG_ID_PARAM_VALUE:
+            return RelayChannel::SETTINGS_ACK;
+        default:
+            return RelayChannel::NONE;
+    }
+}
+
+// Security boundary, not a convenience filter: this path forwards whatever the app
+// sends straight to the flight controller, so it is a tight allowlist. Anything that
+// could arm motors or change mode must go through the RC-override control path.
+bool Mavlink::isAllowedFromApp(uint16_t msgid) {
+    switch (msgid) {
+        case MAVLINK_MSG_ID_PARAM_SET:
+        case MAVLINK_MSG_ID_PARAM_REQUEST_READ:
+        case MAVLINK_MSG_ID_PARAM_REQUEST_LIST:
+            return true;
+        default:
+            return false;
     }
 }
 
