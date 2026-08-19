@@ -12,4 +12,4 @@
     `sendRcOverrides()` use them, so the defaults live next to the code that
     sends them.
 
-  See `boatlooder-esp32/src/Mavlink.h` and `boatlooder-esp32/src/Mavlink.cpp`.
+  See `src/Mavlink.h` and `src/Mavlink.cpp`.
