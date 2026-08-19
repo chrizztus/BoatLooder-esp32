@@ -55,7 +55,7 @@ public:
     // MAVLink relay out to the app: telemetry via notify, param acks via indicate.
     // Both chunk to the negotiated MTU, see the note in the .cpp.
     void notifyTelemetry(const uint8_t* data, size_t length);
-    void indicateSettings(const uint8_t* data, size_t length);
+    void notifySettings(const uint8_t* data, size_t length);
 
 private:
     // usable payload per PDU for the current connection (negotiated MTU - 3 ATT bytes)
@@ -72,7 +72,7 @@ private:
     };
     QueueHandle_t _settingsAckQueue;
     static void settingsAckTask(void* arg);
-    void sendSettingsIndication(const uint8_t* data, size_t length);
+    void sendSettingsNotification(const uint8_t* data, size_t length);
 
     BLECharacteristic* _telemetryChar;
     BLECharacteristic* _settingsChar;

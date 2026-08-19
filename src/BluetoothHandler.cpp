@@ -115,11 +115,17 @@ void BluetoothHandler::init() {
 
     // Settings: app writes param requests in, PARAM_VALUE acks go back out.
     // INDICATE (never NOTIFY) -- the ack design relies on the link-layer
-    // confirmation, and clients pick notify over indicate when both are offered.
+    // NOTIFY, not INDICATE — a deliberate contract revision, verified on
+    // hardware. ATT permits one outstanding indication per connection; when a
+    // confirmation was lost mid param-dump the bearer could not carry
+    // indications again until reconnect, while notify traffic kept flowing.
+    // Reliability lives at the application layer instead: the PARAM_VALUE
+    // echo is the ack, and the app retries on timeout. See both repos'
+    // bridge specs, revised alongside this change.
     _settingsChar = pService->createCharacteristic(
                       SETTINGS_CHARACTERISTIC_UUID,
                       BLECharacteristic::PROPERTY_WRITE |
-                      BLECharacteristic::PROPERTY_INDICATE
+                      BLECharacteristic::PROPERTY_NOTIFY
                     );
     _settingsChar->addDescriptor(new BLE2902());
     _settingsChar->setCallbacks(new SettingsCallbacks(this));
@@ -218,7 +224,7 @@ void BluetoothHandler::notifyTelemetry(const uint8_t* data, size_t length) {
     }
 }
 
-void BluetoothHandler::indicateSettings(const uint8_t* data, size_t length) {
+void BluetoothHandler::notifySettings(const uint8_t* data, size_t length) {
     if (_settingsChar == nullptr || !this->_isConnected || _settingsAckQueue == nullptr) {
         return;
     }
@@ -252,21 +258,33 @@ void BluetoothHandler::settingsAckTask(void* arg) {
     SettingsAck item;
     for (;;) {
         if (xQueueReceive(self->_settingsAckQueue, &item, portMAX_DELAY) == pdTRUE) {
-            self->sendSettingsIndication(item.data, item.length);
+            self->sendSettingsNotification(item.data, item.length);
+            // Pace successive frames: unpaced back-to-back notifies are the
+            // documented silent-drop risk on this stack (firmware spec §7).
+            delay(RELAY_CHUNK_PACING_MS);
         }
     }
 }
 
-void BluetoothHandler::sendSettingsIndication(const uint8_t* data, size_t length) {
+void BluetoothHandler::sendSettingsNotification(const uint8_t* data, size_t length) {
     if (_settingsChar == nullptr || !this->_isConnected) {
         return;
+    }
+
+    // One-time visibility into the negotiated MTU -- an open question the
+    // specs flag and nothing had measured yet.
+    static bool mtuLogged = false;
+    if (!mtuLogged) {
+        mtuLogged = true;
+        LOG_INFOF("Settings channel active, usable payload per PDU: %u bytes\n",
+                  (unsigned)usableChunkSize());
     }
 
     const size_t chunkSize = usableChunkSize();
     for (size_t offset = 0; offset < length; offset += chunkSize) {
         size_t n = min(chunkSize, length - offset);
         _settingsChar->setValue((uint8_t*)(data + offset), n);
-        _settingsChar->indicate();
+        _settingsChar->notify();
         if (offset + n < length) {
             delay(RELAY_CHUNK_PACING_MS);
         }

@@ -278,7 +278,7 @@ void setup() {
     btHandler.notifyTelemetry(data, len);
   });
   mavlink.setOnSettingsAckRelayCallback([](const uint8_t* data, size_t len) {
-    btHandler.indicateSettings(data, len);
+    btHandler.notifySettings(data, len);
   });
 }
 

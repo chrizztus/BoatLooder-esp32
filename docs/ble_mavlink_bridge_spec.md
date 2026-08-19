@@ -1,7 +1,25 @@
 # Firmware spec: BLE MAVLink telemetry + param bridge
 
 Implementation spec for the ESP32 side of the design in the app repo's
-`docs/mavlink_ble_bridge_concept.md`. That doc covers both sides at a
+`docs/mavlink_ble_bridge_concept.md`.
+
+> **Hardware-verified revisions (2026-08-19).** Bench testing against the
+> real board and FC overturned three details below; the code is the source
+> of truth where they conflict:
+> 1. **Settings is `WRITE` + `NOTIFY`, not `WRITE` + `INDICATE`.** ATT
+>    permits one outstanding indication per connection; a confirmation lost
+>    mid param-dump left the channel unable to carry indications until
+>    reconnect, while notify traffic kept flowing. Reliability lives at the
+>    application layer (the PARAM_VALUE echo is the ack; the app retries).
+> 2. **`BLEDevice::setMTU()` must be called *after* `BLEDevice::init()`** —
+>    this library version rejects it before init and the request silently
+>    never happens.
+> 3. The `.ino` referenced below is now `src/main.cpp` (PlatformIO layout),
+>    BLE write callbacks must read `getData()`/`getLength()` (a
+>    `std::string` round-trip truncates at the first NUL, which MAVLink
+>    headers contain), and relayed PARAM_VALUEs go out through a bounded
+>    queue drained by a dedicated task so the blocking send never runs on
+>    the UART parse path. That doc covers both sides at a
 concept level; this one is the concrete firmware punch list — exact
 files, functions, and message routing.
 
@@ -34,7 +52,7 @@ freshly generated (`uuidgen`) — swap if you already reserved others:
 |---|---|---|---|
 | Control *(existing, unchanged)* | `beb5483e-36e1-4688-b7f5-ea07361b26a8` | `WRITE` | — |
 | **Telemetry** | `430f885a-4c7b-40c6-bdfc-280a526fd118` | `NOTIFY` | `BLE2902` |
-| **Settings** | `5cf3acbf-4809-453a-93ab-4359429056e3` | `WRITE` + `INDICATE` | `BLE2902` |
+| **Settings** | `5cf3acbf-4809-453a-93ab-4359429056e3` | `WRITE` + `NOTIFY` *(revised — see note above)* | `BLE2902` |
 
 `BLE2902` is required on both new characteristics — it's the CCCD the
 client writes to enable notify/indicate; without it `notify()`/
