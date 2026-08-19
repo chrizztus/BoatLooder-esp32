@@ -79,7 +79,8 @@ public:
     }
 };
 
-BluetoothHandler::BluetoothHandler() : _telemetryChar(nullptr), _settingsChar(nullptr) {}
+BluetoothHandler::BluetoothHandler()
+    : _settingsAckQueue(nullptr), _telemetryChar(nullptr), _settingsChar(nullptr) {}
 
 void BluetoothHandler::init() {
     LOG_INFO("BT HANLDER INIT :: START");
@@ -124,6 +125,13 @@ void BluetoothHandler::init() {
     _settingsChar->setCallbacks(new SettingsCallbacks(this));
 
     pService->start();
+
+    _settingsAckQueue = xQueueCreate(SETTINGS_ACK_QUEUE_DEPTH, sizeof(SettingsAck));
+    if (_settingsAckQueue != nullptr) {
+        xTaskCreate(settingsAckTask, "settingsAck", 4096, this, 1, nullptr);
+    } else {
+        LOG_ERROR("Failed to create settings ack queue");
+    }
 
     BLEAdvertising *pAdvertising = pServer->getAdvertising();
     pAdvertising->start();
@@ -211,6 +219,45 @@ void BluetoothHandler::notifyTelemetry(const uint8_t* data, size_t length) {
 }
 
 void BluetoothHandler::indicateSettings(const uint8_t* data, size_t length) {
+    if (_settingsChar == nullptr || !this->_isConnected || _settingsAckQueue == nullptr) {
+        return;
+    }
+    if (length == 0 || length > SETTINGS_ACK_MAX_LEN) {
+        LOG_WARNF("Settings ack of %u bytes does not fit the queue slot; dropped\n",
+                  (unsigned)length);
+        return;
+    }
+
+    SettingsAck item;
+    item.length = (uint16_t)length;
+    memcpy(item.data, data, length);
+
+    // Never block the caller: this runs on the UART parse path. If the phone
+    // cannot keep up, drop the oldest queued ack rather than stall the reader
+    // -- a lost PARAM_VALUE surfaces app-side as a timeout the user can retry,
+    // whereas a stalled reader loses unrelated telemetry too.
+    if (xQueueSend(_settingsAckQueue, &item, 0) != pdTRUE) {
+        SettingsAck discarded;
+        if (xQueueReceive(_settingsAckQueue, &discarded, 0) == pdTRUE) {
+            LOG_WARN("Settings ack queue full; dropped oldest");
+        }
+        xQueueSend(_settingsAckQueue, &item, 0);
+    }
+}
+
+// Runs on its own task so the blocking wait for each indication's confirmation
+// never delays MAVLink UART parsing.
+void BluetoothHandler::settingsAckTask(void* arg) {
+    BluetoothHandler* self = static_cast<BluetoothHandler*>(arg);
+    SettingsAck item;
+    for (;;) {
+        if (xQueueReceive(self->_settingsAckQueue, &item, portMAX_DELAY) == pdTRUE) {
+            self->sendSettingsIndication(item.data, item.length);
+        }
+    }
+}
+
+void BluetoothHandler::sendSettingsIndication(const uint8_t* data, size_t length) {
     if (_settingsChar == nullptr || !this->_isConnected) {
         return;
     }

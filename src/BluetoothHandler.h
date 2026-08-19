@@ -2,6 +2,8 @@
 #define BLUETOOTH_HANDLER_H
 
 #include "Arduino.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEServer.h>
@@ -11,6 +13,12 @@
 #define BOATLUDER BoatLuder@
 #define BL_NAME chr!zz+us //  ТОППОФ
 #define DEVICE_NAME STR(BOATLUDER) STR(BL_NAME)
+
+// Longest frame the settings channel ever carries (PARAM_VALUE serializes to
+// 37 bytes); sized with headroom rather than MAVLINK_MAX_PACKET_LEN so the
+// outbound queue stays small.
+#define SETTINGS_ACK_MAX_LEN 128
+#define SETTINGS_ACK_QUEUE_DEPTH 24
 
 typedef std::function<void(const uint8_t* data, size_t length)> OnWriteCallback;
 typedef std::function<void(const uint8_t* data, size_t length)> OnSettingsWriteCallback;
@@ -48,6 +56,18 @@ private:
     size_t usableChunkSize() const;
 
     bool _isConnected;
+    // indicate() blocks until the phone confirms (or times out), so it must
+    // never run on the UART parse path: during a PARAM_REQUEST_LIST dump that
+    // stalls the reader and overflows the 921600-baud RX buffer. Queue the
+    // frames and let one dedicated task send them, one confirmation at a time.
+    struct SettingsAck {
+        uint16_t length;
+        uint8_t data[SETTINGS_ACK_MAX_LEN];
+    };
+    QueueHandle_t _settingsAckQueue;
+    static void settingsAckTask(void* arg);
+    void sendSettingsIndication(const uint8_t* data, size_t length);
+
     BLECharacteristic* _telemetryChar;
     BLECharacteristic* _settingsChar;
     OnWriteCallback _onWriteCallback;
