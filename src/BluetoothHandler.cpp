@@ -72,8 +72,12 @@ BluetoothHandler::BluetoothHandler() : _telemetryChar(nullptr), _settingsChar(nu
 
 void BluetoothHandler::init() {
     LOG_INFO("BT HANLDER INIT :: START");
-    BLEDevice::setMTU(REQUESTED_MTU);
     BLEDevice::init(DEVICE_NAME);
+    // Must come *after* init(): this library version rejects setMTU() before
+    // the BLE stack is up ("BLE is not initialized"), which silently left the
+    // link at the 23-byte default MTU. Verified on hardware -- the spec's
+    // suggested before-init ordering does not work here.
+    BLEDevice::setMTU(REQUESTED_MTU);
     BLEServer *pServer = BLEDevice::createServer();
 
     pServer->setCallbacks(new ServerCallbacks(this));
