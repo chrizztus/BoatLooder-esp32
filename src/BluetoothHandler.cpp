@@ -61,7 +61,7 @@ public:
 
     void onDisconnect(BLEServer* pServer) override {
         if (handler->getOnDisconnectCallback()) {
-            handler->setConnectionState(true);
+            handler->setConnectionState(false);
             handler->getOnDisconnectCallback()();
         }
         pServer->getAdvertising()->start();  // Restart advertising
