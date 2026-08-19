@@ -22,6 +22,9 @@ private:
     // variables
     volatile uint16_t _servoOutThrottle, _servoOutSteering;
     unsigned long _lastHeartbeat;
+    // TODO: dead — allocated and filled in init(), never read. sendRcOverrides()
+    // packs the caller's array instead. Either drop it, or move ownership of the
+    // failsafe defaults here from main.cpp's initRcChannels(). See TODO.md.
     uint16_t *_rcChannelPulses;
     uint8_t _rcChannels;
     HardwareSerial _mavSerial;
