@@ -12,7 +12,7 @@ void Mavlink::init(){
 
   _rcChannelPulses = new uint16_t[_rcChannels];
 
-  for(uint8_t i; i < _rcChannels; ++i){
+  for(uint8_t i = 0; i < _rcChannels; ++i){
     _rcChannelPulses[i] = 800;
   }
 
