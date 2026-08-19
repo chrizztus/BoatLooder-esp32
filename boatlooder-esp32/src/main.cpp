@@ -73,7 +73,15 @@ Mavlink mavlink(NUM_RC_CHANNELS, MAVLINK_UART);
 uint16_t rcChannels[NUM_RC_CHANNELS];
 
 // function prototypes
+// (the Arduino IDE used to generate these implicitly from the .ino file)
 int pwmToSteps(int pwm);
+void initRcChannels();
+void setupMotorPWM();
+void setMotorSpeed(int motorPulse);
+void stepperControlTask(void *pvParameters);
+void thrustControlTask(void *pvParameters);
+void processMavlinkTask(void *pvParameters);
+void statusLedTask(void *parameter);
 void onBluetoothWrite(const uint8_t* data, size_t length);
 void onBluetoothConnect();
 void onBluetoothDisconnect();
@@ -314,7 +322,7 @@ int pwmToSteps(int pwmValue) {
     return steps;
 }
 
-void initRcChannels(){
+void initRcChannels() {
   for (int i = 0; i < NUM_RC_CHANNELS; i++) {
     rcChannels[i] = 1500;
   }
