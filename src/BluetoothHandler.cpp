@@ -25,9 +25,15 @@ public:
     BoatLuderCallbacks(BluetoothHandler* handler) : handler(handler) {}
 
     void onWrite(BLECharacteristic *pCharacteristic) {
-      std::string value = pCharacteristic->getValue().c_str();
-      if (!value.empty() && handler->getOnWriteCallback()) {
-          handler->getOnWriteCallback()((const uint8_t*)value.data(), value.length());
+      // getData()/getLength(), not getValue().c_str(): the control frame is
+      // binary and a std::string rebuilt from c_str() stops at the first NUL
+      // byte, so any frame carrying a zero (e.g. a pulse value like 1280 ->
+      // 0x05 0x00) was silently truncated and then dropped by the length == 8
+      // check in onBluetoothWrite().
+      const uint8_t* data = pCharacteristic->getData();
+      size_t length = pCharacteristic->getLength();
+      if (length > 0 && handler->getOnWriteCallback()) {
+          handler->getOnWriteCallback()(data, length);
       }
     }
 };
@@ -40,9 +46,14 @@ public:
     SettingsCallbacks(BluetoothHandler* handler) : handler(handler) {}
 
     void onWrite(BLECharacteristic *pCharacteristic) {
-      std::string value = pCharacteristic->getValue().c_str();
-      if (!value.empty() && handler->getOnSettingsWriteCallback()) {
-          handler->getOnSettingsWriteCallback()((const uint8_t*)value.data(), value.length());
+      // Same NUL-truncation trap as the control characteristic, but fatal
+      // here: a MAVLink v2 frame carries NUL bytes in its own header (msgid 20
+      // encodes as 0x14 0x00 0x00), so every param request was cut off
+      // mid-header and never reassembled into a complete frame.
+      const uint8_t* data = pCharacteristic->getData();
+      size_t length = pCharacteristic->getLength();
+      if (length > 0 && handler->getOnSettingsWriteCallback()) {
+          handler->getOnSettingsWriteCallback()(data, length);
       }
     }
 };
