@@ -17,8 +17,14 @@
 // Longest frame the settings channel ever carries (PARAM_VALUE serializes to
 // 37 bytes); sized with headroom rather than MAVLINK_MAX_PACKET_LEN so the
 // outbound queue stays small.
-#define SETTINGS_ACK_MAX_LEN 128
-#define SETTINGS_ACK_QUEUE_DEPTH 24
+#define SETTINGS_ACK_MAX_LEN 64
+// Deep on purpose. ArduRover answers PARAM_REQUEST_LIST with ~1000 frames
+// back to back over a 921600-baud UART, while BLE can only clear roughly one
+// indication per connection interval. A shallow queue simply discards that
+// burst, and PARAM_REQUEST_LIST never retransmits, so every dropped frame had
+// to be chased individually afterwards. 384 slots x 66 bytes is ~25 KB of the
+// ESP32's 320 KB and absorbs most of the burst instead.
+#define SETTINGS_ACK_QUEUE_DEPTH 384
 
 typedef std::function<void(const uint8_t* data, size_t length)> OnWriteCallback;
 typedef std::function<void(const uint8_t* data, size_t length)> OnSettingsWriteCallback;
