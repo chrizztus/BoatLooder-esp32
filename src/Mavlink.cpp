@@ -19,30 +19,99 @@ void Mavlink::init(){
   LOG_INFO("Mavlink initilized.");
 }
 
-void Mavlink::setupStreamingRates(){
-  // Setup streaming rates for specific messages.
-  // SERVO_OUTPUT_RAW drives the local control loop (getThrottlePulseUs /
-  // getSteeringPulseUs); everything else in this table is relayed to the app
-  // over the BLE telemetry characteristic. PARAM_VALUE is deliberately absent:
-  // it is response-driven, not a periodic stream.
-  struct { uint32_t msgId; uint32_t intervalUs; } streamedMessages[] = {
-    { MAVLINK_MSG_ID_SERVO_OUTPUT_RAW,    HZ_TO_US(MAVLINK_SERVO_OUTPUT_RAW_INTERVAL_HZ) },
-    { MAVLINK_MSG_ID_HEARTBEAT,           HZ_TO_US(MAVLINK_HEARTBEAT_INTERVAL_HZ) },
-    { MAVLINK_MSG_ID_VFR_HUD,             HZ_TO_US(MAVLINK_VFR_HUD_INTERVAL_HZ) },
-    { MAVLINK_MSG_ID_GPS_RAW_INT,         HZ_TO_US(MAVLINK_GPS_RAW_INT_INTERVAL_HZ) },
-    { MAVLINK_MSG_ID_SYS_STATUS,          HZ_TO_US(MAVLINK_SYS_STATUS_INTERVAL_HZ) },
-    { MAVLINK_MSG_ID_EKF_STATUS_REPORT,   HZ_TO_US(MAVLINK_EKF_STATUS_REPORT_INTERVAL_HZ) },
-    { MAVLINK_MSG_ID_GLOBAL_POSITION_INT, HZ_TO_US(MAVLINK_GLOBAL_POSITION_INT_INTERVAL_HZ) },
-    { MAVLINK_MSG_ID_VIBRATION,           MAVLINK_VIBRATION_INTERVAL_US },
-    { MAVLINK_MSG_ID_HOME_POSITION,       MAVLINK_HOME_POSITION_INTERVAL_US }
-  };
+// Every message we ask the flight controller to stream. SERVO_OUTPUT_RAW drives
+// the local control loop (getThrottlePulseUs / getSteeringPulseUs); the rest are
+// relayed to the app over the BLE telemetry characteristic. PARAM_VALUE is
+// deliberately absent: it is response-driven, not a periodic stream.
+static const struct {
+  uint32_t msgId;
+  uint32_t intervalUs;
+} STREAMED_MESSAGES[] = {
+  { MAVLINK_MSG_ID_SERVO_OUTPUT_RAW,    HZ_TO_US(MAVLINK_SERVO_OUTPUT_RAW_INTERVAL_HZ) },
+  { MAVLINK_MSG_ID_HEARTBEAT,           HZ_TO_US(MAVLINK_HEARTBEAT_INTERVAL_HZ) },
+  { MAVLINK_MSG_ID_VFR_HUD,             HZ_TO_US(MAVLINK_VFR_HUD_INTERVAL_HZ) },
+  { MAVLINK_MSG_ID_GPS_RAW_INT,         HZ_TO_US(MAVLINK_GPS_RAW_INT_INTERVAL_HZ) },
+  { MAVLINK_MSG_ID_SYS_STATUS,          HZ_TO_US(MAVLINK_SYS_STATUS_INTERVAL_HZ) },
+  { MAVLINK_MSG_ID_EKF_STATUS_REPORT,   HZ_TO_US(MAVLINK_EKF_STATUS_REPORT_INTERVAL_HZ) },
+  { MAVLINK_MSG_ID_GLOBAL_POSITION_INT, HZ_TO_US(MAVLINK_GLOBAL_POSITION_INT_INTERVAL_HZ) },
+  { MAVLINK_MSG_ID_VIBRATION,           MAVLINK_VIBRATION_INTERVAL_US },
+  { MAVLINK_MSG_ID_HOME_POSITION,       MAVLINK_HOME_POSITION_INTERVAL_US }
+};
 
-  for (uint8_t i = 0; i < sizeof(streamedMessages) / sizeof(streamedMessages[0]); ++i) {
-    requestMessageInterval(streamedMessages[i].msgId, streamedMessages[i].intervalUs);
+static const uint8_t STREAMED_MESSAGE_COUNT =
+    sizeof(STREAMED_MESSAGES) / sizeof(STREAMED_MESSAGES[0]);
+
+void Mavlink::setupStreamingRates(){
+  _streamSeenMask = 0;
+  _streamRetryRounds = 0;
+  _streamGapReported = false;
+  _lastStreamCheck = millis();
+
+  for (uint8_t i = 0; i < STREAMED_MESSAGE_COUNT; ++i) {
+    requestMessageInterval(STREAMED_MESSAGES[i].msgId, STREAMED_MESSAGES[i].intervalUs);
     delay(100);
   }
 }
 
+void Mavlink::markStreamSeen(uint32_t msgid) {
+  for (uint8_t i = 0; i < STREAMED_MESSAGE_COUNT; ++i) {
+    if (STREAMED_MESSAGES[i].msgId == msgid) {
+      _streamSeenMask |= (1UL << i);
+      return;
+    }
+  }
+}
+
+// Observed on hardware: of nine requests sent back to back at startup only six
+// were ever acknowledged, and exactly those six streamed -- EKF_STATUS_REPORT,
+// GPS_RAW_INT and HOME_POSITION never arrived, leaving the app's EKF tile
+// permanently "NO DATA". A single fire-and-forget round is not enough, so keep
+// asking for whatever has not shown up.
+void Mavlink::ensureStreamsFlowing() {
+  if (!haveHeartbeat()) {
+    return;
+  }
+
+  const uint32_t allSeen = (STREAMED_MESSAGE_COUNT >= 32)
+      ? 0xFFFFFFFFUL
+      : ((1UL << STREAMED_MESSAGE_COUNT) - 1);
+  if (_streamSeenMask == allSeen) {
+    return;
+  }
+
+  unsigned long now = millis();
+  if (now - _lastStreamCheck < MAVLINK_STREAM_RECHECK_MS) {
+    return;
+  }
+  _lastStreamCheck = now;
+
+  if (_streamRetryRounds >= MAVLINK_STREAM_MAX_RETRY_ROUNDS) {
+    // Give up quietly rather than talking to the flight controller forever.
+    // Some messages legitimately never arrive: HOME_POSITION is not sent until
+    // a home position exists, which needs a GPS fix.
+    if (!_streamGapReported) {
+      _streamGapReported = true;
+      for (uint8_t i = 0; i < STREAMED_MESSAGE_COUNT; ++i) {
+        if (!(_streamSeenMask & (1UL << i))) {
+          LOG_WARNF("Stream msgid %u never arrived after %u retries\n",
+                    (unsigned)STREAMED_MESSAGES[i].msgId,
+                    (unsigned)MAVLINK_STREAM_MAX_RETRY_ROUNDS);
+        }
+      }
+    }
+    return;
+  }
+
+  _streamRetryRounds++;
+  for (uint8_t i = 0; i < STREAMED_MESSAGE_COUNT; ++i) {
+    if (!(_streamSeenMask & (1UL << i))) {
+      LOG_INFOF("Re-requesting stream msgid %u (round %u)\n",
+                (unsigned)STREAMED_MESSAGES[i].msgId, (unsigned)_streamRetryRounds);
+      requestMessageInterval(STREAMED_MESSAGES[i].msgId, STREAMED_MESSAGES[i].intervalUs);
+      delay(20);
+    }
+  }
+}
 
 void Mavlink::sendRcOverrides(const uint16_t *pulses){
     mavlink_message_t msg;
@@ -119,6 +188,7 @@ void Mavlink::requestMessageInterval(uint16_t message_id, uint32_t interval_us) 
 void Mavlink::handleReceivedByte(uint8_t byte) {
     if (mavlink_parse_char(MAVLINK_COMM_0, byte, &_msg, &_status)) {
         LOG_DEBUGF("Received Message ID: %d\n", _msg.msgid);
+        markStreamSeen(_msg.msgid);
         if (_msg.msgid == MAVLINK_MSG_ID_SERVO_OUTPUT_RAW) {
             mavlink_servo_output_raw_t servo_output;
             mavlink_msg_servo_output_raw_decode(&_msg, &servo_output);

@@ -18,6 +18,13 @@
 
 #define MAVLINK_HEARTBEAT_TIMEOUT_MS 5000
 
+// SET_MESSAGE_INTERVAL is fire-and-forget: a request lost on the UART, or one
+// answered while the flight controller was still starting up, leaves that
+// message silently absent forever. Re-check which streams actually arrived and
+// re-request the missing ones a bounded number of times.
+#define MAVLINK_STREAM_RECHECK_MS 5000
+#define MAVLINK_STREAM_MAX_RETRY_ROUNDS 6
+
 #define MAVLINK_TARGET_SYSTEM_ID 1
 #define MAVLINK_TARGET_COMPONENT_ID 0
 #define MAVLINK_LOCAL_SYSTEM_ID 255
@@ -64,17 +71,30 @@ private:
     OnRelayCallback _onTelemetryRelayCallback;
     OnRelayCallback _onSettingsAckRelayCallback;
 
+    // stream-liveness tracking: one bit per entry in STREAMED_MESSAGES
+    uint32_t _streamSeenMask;
+    uint8_t _streamRetryRounds;
+    unsigned long _lastStreamCheck;
+    bool _streamGapReported;
+
     // functions
     void requestMessageInterval(uint16_t, uint32_t);
+    void markStreamSeen(uint32_t msgid);
     static void onUartRx(void* arg);
     void handleReceivedByte(uint8_t byte);
     RelayChannel classifyRelay(uint16_t msgid);
     bool isAllowedFromApp(uint16_t msgid);
 
 public:
-    Mavlink(uint8_t numChannels, uint8_t mavUart) : _rcChannels(numChannels), _mavSerial(mavUart) {}
+    Mavlink(uint8_t numChannels, uint8_t mavUart)
+        : _streamSeenMask(0), _streamRetryRounds(0), _lastStreamCheck(0),
+          _streamGapReported(false), _rcChannels(numChannels), _mavSerial(mavUart) {}
     void init();
     void setupStreamingRates();
+
+    /// Re-requests any whitelisted stream that has not actually arrived yet.
+    /// Call periodically; cheap and self-disarming once every stream is live.
+    void ensureStreamsFlowing();
     void sendRcOverrides(const uint16_t* pulses);
     uint16_t getThrottlePulseUs(void);
     uint16_t getSteeringPulseUs(void);

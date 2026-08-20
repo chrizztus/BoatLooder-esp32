@@ -203,6 +203,10 @@ void processMavlinkTask(void *pvParameters) {
         deviceConnected = true;
         LOG_INFO("Received Mavlink Heartbeat");
       }
+      // Confirm the requested telemetry streams actually turned up, and chase
+      // any that did not -- SET_MESSAGE_INTERVAL is not acknowledged reliably.
+      mavlink.ensureStreamsFlowing();
+
       // Send RC overrides since the device is connected
       mavlink.sendRcOverrides((const uint16_t *) rcChannels);
     } else {
