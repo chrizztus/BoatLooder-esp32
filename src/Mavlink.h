@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Arduino.h"
-#include "mavlink/v2.0/common/mavlink.h"
+#include "mavlink/v2.0/ardupilotmega/mavlink.h"
 
 #define MAVLINK_HEARTBEAT_INTERVAL_HZ 1
 #define MAVLINK_SERVO_OUTPUT_RAW_INTERVAL_HZ 10
@@ -18,6 +18,16 @@
 
 #define MAVLINK_HEARTBEAT_TIMEOUT_MS 5000
 
+// SET_MESSAGE_INTERVAL is fire-and-forget: a request lost on the UART, or one
+// answered while the flight controller was still starting up, leaves that
+// message silently absent forever. Re-check which streams actually arrived and
+// re-request the missing ones a bounded number of times.
+#define MAVLINK_STREAM_RECHECK_MS 5000
+// 12 rounds = ~60s. Measured on hardware: GPS_RAW_INT only began streaming
+// after the fourth retry (~20s), presumably while the GPS was still starting
+// up, so a short budget would have given up on a stream that was about to work.
+#define MAVLINK_STREAM_MAX_RETRY_ROUNDS 12
+
 #define MAVLINK_TARGET_SYSTEM_ID 1
 #define MAVLINK_TARGET_COMPONENT_ID 0
 #define MAVLINK_LOCAL_SYSTEM_ID 255
@@ -27,13 +37,6 @@
 #define MAVLINK_UART_RX 13
 #define MAVLINK_UART_TX 14
 
-// EKF_STATUS_REPORT lives in the ardupilotmega dialect, which is not vendored here
-// (include/mavlink/v2.0 only carries common/minimal/standard). ArduPilot emits it and
-// both sides of the BLE contract expect msgid 193, so define just the id -- the relay
-// never decodes the payload, it only needs to recognise the number.
-#ifndef MAVLINK_MSG_ID_EKF_STATUS_REPORT
-#define MAVLINK_MSG_ID_EKF_STATUS_REPORT 193
-#endif
 
 // where a received message gets forwarded, if anywhere
 enum class RelayChannel { NONE, TELEMETRY, SETTINGS_ACK };
@@ -64,17 +67,30 @@ private:
     OnRelayCallback _onTelemetryRelayCallback;
     OnRelayCallback _onSettingsAckRelayCallback;
 
+    // stream-liveness tracking: one bit per entry in STREAMED_MESSAGES
+    uint32_t _streamSeenMask;
+    uint8_t _streamRetryRounds;
+    unsigned long _lastStreamCheck;
+    bool _streamGapReported;
+
     // functions
     void requestMessageInterval(uint16_t, uint32_t);
+    void markStreamSeen(uint32_t msgid);
     static void onUartRx(void* arg);
     void handleReceivedByte(uint8_t byte);
     RelayChannel classifyRelay(uint16_t msgid);
     bool isAllowedFromApp(uint16_t msgid);
 
 public:
-    Mavlink(uint8_t numChannels, uint8_t mavUart) : _rcChannels(numChannels), _mavSerial(mavUart) {}
+    Mavlink(uint8_t numChannels, uint8_t mavUart)
+        : _streamSeenMask(0), _streamRetryRounds(0), _lastStreamCheck(0),
+          _streamGapReported(false), _rcChannels(numChannels), _mavSerial(mavUart) {}
     void init();
     void setupStreamingRates();
+
+    /// Re-requests any whitelisted stream that has not actually arrived yet.
+    /// Call periodically; cheap and self-disarming once every stream is live.
+    void ensureStreamsFlowing();
     void sendRcOverrides(const uint16_t* pulses);
     uint16_t getThrottlePulseUs(void);
     uint16_t getSteeringPulseUs(void);

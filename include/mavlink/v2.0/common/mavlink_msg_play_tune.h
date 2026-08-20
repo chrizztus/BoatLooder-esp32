@@ -1,6 +1,8 @@
 #pragma once
 // MESSAGE PLAY_TUNE PACKING
 
+#include <stdint.h>
+
 #define MAVLINK_MSG_ID_PLAY_TUNE 258
 
 
@@ -243,7 +245,7 @@ static inline void mavlink_msg_play_tune_send_struct(mavlink_channel_t chan, con
 
 #if MAVLINK_MSG_ID_PLAY_TUNE_LEN <= MAVLINK_MAX_PAYLOAD_LEN
 /*
-  This variant of _send() can be used to save stack space by re-using
+  This variant of _send() can be used to save stack space by reusing
   memory from the receive buffer.  The caller provides a
   mavlink_message_t which is the size of a full mavlink message. This
   is usually the receive buffer for the channel, and allows a reply to an
