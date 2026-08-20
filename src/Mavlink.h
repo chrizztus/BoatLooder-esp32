@@ -23,7 +23,10 @@
 // message silently absent forever. Re-check which streams actually arrived and
 // re-request the missing ones a bounded number of times.
 #define MAVLINK_STREAM_RECHECK_MS 5000
-#define MAVLINK_STREAM_MAX_RETRY_ROUNDS 6
+// 12 rounds = ~60s. Measured on hardware: GPS_RAW_INT only began streaming
+// after the fourth retry (~20s), presumably while the GPS was still starting
+// up, so a short budget would have given up on a stream that was about to work.
+#define MAVLINK_STREAM_MAX_RETRY_ROUNDS 12
 
 #define MAVLINK_TARGET_SYSTEM_ID 1
 #define MAVLINK_TARGET_COMPONENT_ID 0
