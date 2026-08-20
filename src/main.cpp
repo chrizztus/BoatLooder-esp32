@@ -73,8 +73,17 @@ Mavlink mavlink(NUM_RC_CHANNELS, MAVLINK_UART);
 uint16_t rcChannels[NUM_RC_CHANNELS];
 
 // function prototypes
+// (the Arduino IDE used to generate these implicitly from the .ino file)
 int pwmToSteps(int pwm);
+void initRcChannels();
+void setupMotorPWM();
+void setMotorSpeed(int motorPulse);
+void stepperControlTask(void *pvParameters);
+void thrustControlTask(void *pvParameters);
+void processMavlinkTask(void *pvParameters);
+void statusLedTask(void *parameter);
 void onBluetoothWrite(const uint8_t* data, size_t length);
+void onBluetoothSettingsWrite(const uint8_t* data, size_t length);
 void onBluetoothConnect();
 void onBluetoothDisconnect();
 
@@ -261,8 +270,16 @@ void setup() {
   btHandler.init();  // Initialize Bluetooth
   // set bluetooth callbacks
   btHandler.setOnWriteCallback(onBluetoothWrite);
+  btHandler.setOnSettingsWriteCallback(onBluetoothSettingsWrite);
   btHandler.setOnConnectCallback(onBluetoothConnect);
   btHandler.setOnDisconnectCallback(onBluetoothDisconnect);
+  // relay mavlink coming off the UART out to the app
+  mavlink.setOnTelemetryRelayCallback([](const uint8_t* data, size_t len) {
+    btHandler.notifyTelemetry(data, len);
+  });
+  mavlink.setOnSettingsAckRelayCallback([](const uint8_t* data, size_t len) {
+    btHandler.notifySettings(data, len);
+  });
 }
 
 void loop() {
@@ -279,6 +296,14 @@ void onBluetoothWrite(const uint8_t* data, size_t length) {
       rcChannels[2] = data[4] << 8 | data[5]; // channel3 (throttle)
       rcChannels[3] = data[6] << 8 | data[7]; // channel4 (arm/disarm)
       rcChannels[4] = data[0] << 8 | data[1]; // channel5 (mode)
+    }
+}
+
+// mavlink written by the app on the settings characteristic, fed byte-wise into
+// the second parser channel (the allowlist lives in Mavlink::handleBleSettingsByte)
+void onBluetoothSettingsWrite(const uint8_t* data, size_t length) {
+    for (size_t i = 0; i < length; i++) {
+      mavlink.handleBleSettingsByte(data[i]);
     }
 }
 
@@ -314,7 +339,7 @@ int pwmToSteps(int pwmValue) {
     return steps;
 }
 
-void initRcChannels(){
+void initRcChannels() {
   for (int i = 0; i < NUM_RC_CHANNELS; i++) {
     rcChannels[i] = 1500;
   }
