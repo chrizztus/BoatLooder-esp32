@@ -1,6 +1,8 @@
 #pragma once
 // MESSAGE UAVCAN_NODE_INFO PACKING
 
+#include <stdint.h>
+
 #define MAVLINK_MSG_ID_UAVCAN_NODE_INFO 311
 
 
@@ -318,7 +320,7 @@ static inline void mavlink_msg_uavcan_node_info_send_struct(mavlink_channel_t ch
 
 #if MAVLINK_MSG_ID_UAVCAN_NODE_INFO_LEN <= MAVLINK_MAX_PAYLOAD_LEN
 /*
-  This variant of _send() can be used to save stack space by re-using
+  This variant of _send() can be used to save stack space by reusing
   memory from the receive buffer.  The caller provides a
   mavlink_message_t which is the size of a full mavlink message. This
   is usually the receive buffer for the channel, and allows a reply to an

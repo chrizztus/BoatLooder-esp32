@@ -1,6 +1,8 @@
 #pragma once
 // MESSAGE PARAM_EXT_VALUE PACKING
 
+#include <stdint.h>
+
 #define MAVLINK_MSG_ID_PARAM_EXT_VALUE 322
 
 
@@ -258,7 +260,7 @@ static inline void mavlink_msg_param_ext_value_send_struct(mavlink_channel_t cha
 
 #if MAVLINK_MSG_ID_PARAM_EXT_VALUE_LEN <= MAVLINK_MAX_PAYLOAD_LEN
 /*
-  This variant of _send() can be used to save stack space by re-using
+  This variant of _send() can be used to save stack space by reusing
   memory from the receive buffer.  The caller provides a
   mavlink_message_t which is the size of a full mavlink message. This
   is usually the receive buffer for the channel, and allows a reply to an

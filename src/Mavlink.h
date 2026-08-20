@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Arduino.h"
-#include "mavlink/v2.0/common/mavlink.h"
+#include "mavlink/v2.0/ardupilotmega/mavlink.h"
 
 #define MAVLINK_HEARTBEAT_INTERVAL_HZ 1
 #define MAVLINK_SERVO_OUTPUT_RAW_INTERVAL_HZ 10
@@ -37,13 +37,6 @@
 #define MAVLINK_UART_RX 13
 #define MAVLINK_UART_TX 14
 
-// EKF_STATUS_REPORT lives in the ardupilotmega dialect, which is not vendored here
-// (include/mavlink/v2.0 only carries common/minimal/standard). ArduPilot emits it and
-// both sides of the BLE contract expect msgid 193, so define just the id -- the relay
-// never decodes the payload, it only needs to recognise the number.
-#ifndef MAVLINK_MSG_ID_EKF_STATUS_REPORT
-#define MAVLINK_MSG_ID_EKF_STATUS_REPORT 193
-#endif
 
 // where a received message gets forwarded, if anywhere
 enum class RelayChannel { NONE, TELEMETRY, SETTINGS_ACK };

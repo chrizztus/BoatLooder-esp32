@@ -1,6 +1,8 @@
 #pragma once
 // MESSAGE GLOBAL_POSITION_INT PACKING
 
+#include <stdint.h>
+
 #define MAVLINK_MSG_ID_GLOBAL_POSITION_INT 33
 
 
@@ -9,7 +11,7 @@ typedef struct __mavlink_global_position_int_t {
  int32_t lat; /*< [degE7] Latitude, expressed*/
  int32_t lon; /*< [degE7] Longitude, expressed*/
  int32_t alt; /*< [mm] Altitude (MSL). Note that virtually all GPS modules provide both WGS84 and MSL.*/
- int32_t relative_alt; /*< [mm] Altitude above ground*/
+ int32_t relative_alt; /*< [mm] Altitude above home*/
  int16_t vx; /*< [cm/s] Ground X Speed (Latitude, positive north)*/
  int16_t vy; /*< [cm/s] Ground Y Speed (Longitude, positive east)*/
  int16_t vz; /*< [cm/s] Ground Z Speed (Altitude, positive down)*/
@@ -69,7 +71,7 @@ typedef struct __mavlink_global_position_int_t {
  * @param lat [degE7] Latitude, expressed
  * @param lon [degE7] Longitude, expressed
  * @param alt [mm] Altitude (MSL). Note that virtually all GPS modules provide both WGS84 and MSL.
- * @param relative_alt [mm] Altitude above ground
+ * @param relative_alt [mm] Altitude above home
  * @param vx [cm/s] Ground X Speed (Latitude, positive north)
  * @param vy [cm/s] Ground Y Speed (Longitude, positive east)
  * @param vz [cm/s] Ground Z Speed (Altitude, positive down)
@@ -122,7 +124,7 @@ static inline uint16_t mavlink_msg_global_position_int_pack(uint8_t system_id, u
  * @param lat [degE7] Latitude, expressed
  * @param lon [degE7] Longitude, expressed
  * @param alt [mm] Altitude (MSL). Note that virtually all GPS modules provide both WGS84 and MSL.
- * @param relative_alt [mm] Altitude above ground
+ * @param relative_alt [mm] Altitude above home
  * @param vx [cm/s] Ground X Speed (Latitude, positive north)
  * @param vy [cm/s] Ground Y Speed (Longitude, positive east)
  * @param vz [cm/s] Ground Z Speed (Altitude, positive down)
@@ -178,7 +180,7 @@ static inline uint16_t mavlink_msg_global_position_int_pack_status(uint8_t syste
  * @param lat [degE7] Latitude, expressed
  * @param lon [degE7] Longitude, expressed
  * @param alt [mm] Altitude (MSL). Note that virtually all GPS modules provide both WGS84 and MSL.
- * @param relative_alt [mm] Altitude above ground
+ * @param relative_alt [mm] Altitude above home
  * @param vx [cm/s] Ground X Speed (Latitude, positive north)
  * @param vy [cm/s] Ground Y Speed (Longitude, positive east)
  * @param vz [cm/s] Ground Z Speed (Altitude, positive down)
@@ -270,7 +272,7 @@ static inline uint16_t mavlink_msg_global_position_int_encode_status(uint8_t sys
  * @param lat [degE7] Latitude, expressed
  * @param lon [degE7] Longitude, expressed
  * @param alt [mm] Altitude (MSL). Note that virtually all GPS modules provide both WGS84 and MSL.
- * @param relative_alt [mm] Altitude above ground
+ * @param relative_alt [mm] Altitude above home
  * @param vx [cm/s] Ground X Speed (Latitude, positive north)
  * @param vy [cm/s] Ground Y Speed (Longitude, positive east)
  * @param vz [cm/s] Ground Z Speed (Altitude, positive down)
@@ -325,7 +327,7 @@ static inline void mavlink_msg_global_position_int_send_struct(mavlink_channel_t
 
 #if MAVLINK_MSG_ID_GLOBAL_POSITION_INT_LEN <= MAVLINK_MAX_PAYLOAD_LEN
 /*
-  This variant of _send() can be used to save stack space by re-using
+  This variant of _send() can be used to save stack space by reusing
   memory from the receive buffer.  The caller provides a
   mavlink_message_t which is the size of a full mavlink message. This
   is usually the receive buffer for the channel, and allows a reply to an
@@ -411,7 +413,7 @@ static inline int32_t mavlink_msg_global_position_int_get_alt(const mavlink_mess
 /**
  * @brief Get field relative_alt from global_position_int message
  *
- * @return [mm] Altitude above ground
+ * @return [mm] Altitude above home
  */
 static inline int32_t mavlink_msg_global_position_int_get_relative_alt(const mavlink_message_t* msg)
 {

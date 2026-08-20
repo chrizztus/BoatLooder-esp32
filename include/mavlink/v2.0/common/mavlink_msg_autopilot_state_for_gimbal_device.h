@@ -1,6 +1,8 @@
 #pragma once
 // MESSAGE AUTOPILOT_STATE_FOR_GIMBAL_DEVICE PACKING
 
+#include <stdint.h>
+
 #define MAVLINK_MSG_ID_AUTOPILOT_STATE_FOR_GIMBAL_DEVICE 286
 
 MAVPACKED(
@@ -17,7 +19,7 @@ typedef struct __mavlink_autopilot_state_for_gimbal_device_t {
  uint8_t target_system; /*<  System ID*/
  uint8_t target_component; /*<  Component ID*/
  uint8_t landed_state; /*<  The landed state. Is set to MAV_LANDED_STATE_UNDEFINED if landed state is unknown.*/
- float angular_velocity_z; /*< [rad/s] Z component of angular velocity in NED (North, East, Down). NaN if unknown.*/
+ float angular_velocity_z; /*< [rad/s] Z component of angular velocity in NED (North, East, Down). 0 if unknown. Use 0.00001 to represent a measured value of zero.*/
 }) mavlink_autopilot_state_for_gimbal_device_t;
 
 #define MAVLINK_MSG_ID_AUTOPILOT_STATE_FOR_GIMBAL_DEVICE_LEN 57
@@ -89,7 +91,7 @@ typedef struct __mavlink_autopilot_state_for_gimbal_device_t {
  * @param feed_forward_angular_velocity_z [rad/s] Feed forward Z component of angular velocity (positive: yawing to the right). NaN to be ignored. This is to indicate if the autopilot is actively yawing.
  * @param estimator_status  Bitmap indicating which estimator outputs are valid.
  * @param landed_state  The landed state. Is set to MAV_LANDED_STATE_UNDEFINED if landed state is unknown.
- * @param angular_velocity_z [rad/s] Z component of angular velocity in NED (North, East, Down). NaN if unknown.
+ * @param angular_velocity_z [rad/s] Z component of angular velocity in NED (North, East, Down). 0 if unknown. Use 0.00001 to represent a measured value of zero.
  * @return length of the message in bytes (excluding serial stream start sign)
  */
 static inline uint16_t mavlink_msg_autopilot_state_for_gimbal_device_pack(uint8_t system_id, uint8_t component_id, mavlink_message_t* msg,
@@ -152,7 +154,7 @@ static inline uint16_t mavlink_msg_autopilot_state_for_gimbal_device_pack(uint8_
  * @param feed_forward_angular_velocity_z [rad/s] Feed forward Z component of angular velocity (positive: yawing to the right). NaN to be ignored. This is to indicate if the autopilot is actively yawing.
  * @param estimator_status  Bitmap indicating which estimator outputs are valid.
  * @param landed_state  The landed state. Is set to MAV_LANDED_STATE_UNDEFINED if landed state is unknown.
- * @param angular_velocity_z [rad/s] Z component of angular velocity in NED (North, East, Down). NaN if unknown.
+ * @param angular_velocity_z [rad/s] Z component of angular velocity in NED (North, East, Down). 0 if unknown. Use 0.00001 to represent a measured value of zero.
  * @return length of the message in bytes (excluding serial stream start sign)
  */
 static inline uint16_t mavlink_msg_autopilot_state_for_gimbal_device_pack_status(uint8_t system_id, uint8_t component_id, mavlink_status_t *_status, mavlink_message_t* msg,
@@ -218,7 +220,7 @@ static inline uint16_t mavlink_msg_autopilot_state_for_gimbal_device_pack_status
  * @param feed_forward_angular_velocity_z [rad/s] Feed forward Z component of angular velocity (positive: yawing to the right). NaN to be ignored. This is to indicate if the autopilot is actively yawing.
  * @param estimator_status  Bitmap indicating which estimator outputs are valid.
  * @param landed_state  The landed state. Is set to MAV_LANDED_STATE_UNDEFINED if landed state is unknown.
- * @param angular_velocity_z [rad/s] Z component of angular velocity in NED (North, East, Down). NaN if unknown.
+ * @param angular_velocity_z [rad/s] Z component of angular velocity in NED (North, East, Down). 0 if unknown. Use 0.00001 to represent a measured value of zero.
  * @return length of the message in bytes (excluding serial stream start sign)
  */
 static inline uint16_t mavlink_msg_autopilot_state_for_gimbal_device_pack_chan(uint8_t system_id, uint8_t component_id, uint8_t chan,
@@ -320,7 +322,7 @@ static inline uint16_t mavlink_msg_autopilot_state_for_gimbal_device_encode_stat
  * @param feed_forward_angular_velocity_z [rad/s] Feed forward Z component of angular velocity (positive: yawing to the right). NaN to be ignored. This is to indicate if the autopilot is actively yawing.
  * @param estimator_status  Bitmap indicating which estimator outputs are valid.
  * @param landed_state  The landed state. Is set to MAV_LANDED_STATE_UNDEFINED if landed state is unknown.
- * @param angular_velocity_z [rad/s] Z component of angular velocity in NED (North, East, Down). NaN if unknown.
+ * @param angular_velocity_z [rad/s] Z component of angular velocity in NED (North, East, Down). 0 if unknown. Use 0.00001 to represent a measured value of zero.
  */
 #ifdef MAVLINK_USE_CONVENIENCE_FUNCTIONS
 
@@ -377,7 +379,7 @@ static inline void mavlink_msg_autopilot_state_for_gimbal_device_send_struct(mav
 
 #if MAVLINK_MSG_ID_AUTOPILOT_STATE_FOR_GIMBAL_DEVICE_LEN <= MAVLINK_MAX_PAYLOAD_LEN
 /*
-  This variant of _send() can be used to save stack space by re-using
+  This variant of _send() can be used to save stack space by reusing
   memory from the receive buffer.  The caller provides a
   mavlink_message_t which is the size of a full mavlink message. This
   is usually the receive buffer for the channel, and allows a reply to an
@@ -549,7 +551,7 @@ static inline uint8_t mavlink_msg_autopilot_state_for_gimbal_device_get_landed_s
 /**
  * @brief Get field angular_velocity_z from autopilot_state_for_gimbal_device message
  *
- * @return [rad/s] Z component of angular velocity in NED (North, East, Down). NaN if unknown.
+ * @return [rad/s] Z component of angular velocity in NED (North, East, Down). 0 if unknown. Use 0.00001 to represent a measured value of zero.
  */
 static inline float mavlink_msg_autopilot_state_for_gimbal_device_get_angular_velocity_z(const mavlink_message_t* msg)
 {
