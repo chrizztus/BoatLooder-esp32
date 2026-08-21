@@ -353,3 +353,66 @@ already used for `onBluetoothConnect`/`onBluetoothDisconnect`.)
 
 No file needs a rewrite from scratch — every change above is additive
 to the existing structure.
+
+## 9. Extension: mission upload (SURVEY tab's pencil/goto tools)
+
+**Implemented 2026-08-21**, on top of everything above — no new
+characteristics, no new parser state, just two allowlist/relay
+entries. The app's `MissionController` (boatlooder-app) speaks the
+standard MAVLink mission-upload handshake
+(https://mavlink.io/en/services/mission.html) over the existing
+Settings characteristic; the firmware's job is unchanged in kind from
+§3/§4, just wider:
+
+- `classifyRelay()` (`src/Mavlink.cpp`) now also relays
+  `MISSION_REQUEST_INT`, `MISSION_REQUEST` (legacy, some FW versions
+  still send it), `MISSION_ACK`, and `MISSION_CURRENT` — all
+  vehicle→app, all `RelayChannel::SETTINGS_ACK`, the same channel
+  `PARAM_VALUE` already used.
+- `isAllowedFromApp()` now also allows `MISSION_COUNT`,
+  `MISSION_ITEM_INT`, and `MISSION_CLEAR_ALL` — all app→vehicle.
+
+A single coordinate (the goto/"drive here" tool) is not a distinct
+wire format: it is a one-item mission, `MISSION_COUNT{count:1}`
+followed by one `MISSION_ITEM_INT`. Reusing the list-upload protocol
+for it, rather than something like `SET_POSITION_TARGET_GLOBAL_INT` or
+`MAV_CMD_DO_REPOSITION`, was a deliberate choice: both of those either
+require the vehicle already be in GUIDED mode or (for `DO_REPOSITION`)
+cause ArduPilot to *enter* GUIDED automatically — a mode change
+triggered from the BLE settings channel, which is exactly the class of
+thing §4's allowlist exists to keep out. A mission upload changes
+nothing about the vehicle's current mode or motor state by itself;
+`MAV_CMD_DO_SET_MODE` is still nowhere on this allowlist, so *running*
+an uploaded mission (switching to AUTO) still only happens through
+HELM's own mode selector, over the RC-override control characteristic
+— upload and "go" stay two separate, separately-gated actions, same as
+arming already works.
+
+### 9.1 Also added: mission download, and the bug it caught
+
+**Added the same day**, once real-hardware testing needed a way to read
+a mission back rather than trust the upload's own `MISSION_ACK`:
+
+- `isAllowedFromApp()` also allows `MISSION_REQUEST_LIST`,
+  `MISSION_REQUEST_INT`, and `MISSION_ACK` (app→vehicle) — the
+  download-side triggers/terminator. `MISSION_REQUEST_INT`/`MISSION_ACK`
+  are shared with the upload handshake (§9), just flowing the other
+  way for a download.
+- `classifyRelay()` also relays `MISSION_COUNT` and `MISSION_ITEM_INT`
+  vehicle→app — the vehicle's *answers* to a download request, the
+  mirror image of the app sending those same msgids during upload.
+
+Nothing in `boatlooder-app` downloads a mission yet — this exists so a
+future "what's currently on the vehicle" feature is a Dart method, not
+another firmware round-trip. But it is what caught a real bug on first
+use: uploading 3 waypoints at seq 0-2 and reading them back showed only
+2 stored, with seq 0 replaced by the vehicle's own home position
+(0,0 on this bench rig). **ArduPilot always reserves mission index 0
+for home** — content a GCS uploads there is accepted into the
+handshake but never stored as a nav command. `MissionController` was
+fixed to upload real waypoints at seq 1..N (`MISSION_COUNT{count:
+N+1}`), with seq 0 sent as a harmless placeholder. Re-verified the same
+way: upload 3 points, download, get exactly those 3 points back at seq
+1-3 with matching coordinates and `MISSION_CURRENT.total == 3`. No
+firmware change was needed for this fix — it was entirely an app-side
+protocol bug, just one this download support is what made visible.

@@ -210,6 +210,13 @@ void Mavlink::handleReceivedByte(uint8_t byte) {
             if (channel == RelayChannel::TELEMETRY && _onTelemetryRelayCallback) {
                 _onTelemetryRelayCallback(buf, len);
             } else if (channel == RelayChannel::SETTINGS_ACK && _onSettingsAckRelayCallback) {
+                // SETTINGS_ACK is response-driven (param reads/writes, mission
+                // upload handshake) rather than a periodic stream like
+                // TELEMETRY, so logging every relay here is sparse by
+                // construction -- worth it as a way to confirm on the wire
+                // that the FC actually answered a mission upload, not just
+                // that the app sent one.
+                LOG_INFOF("Relaying FC msgid %d to app (settings ack)\n", _msg.msgid);
                 _onSettingsAckRelayCallback(buf, len);
             }
         }
@@ -225,6 +232,7 @@ void Mavlink::handleBleSettingsByte(uint8_t byte) {
             LOG_WARNF("Dropped disallowed msgid %d from BLE settings channel\n", _bleMsg.msgid);
             return;
         }
+        LOG_INFOF("Forwarding app msgid %d from BLE settings to FC\n", _bleMsg.msgid);
         uint8_t buf[MAVLINK_MAX_PACKET_LEN];
         uint16_t len = mavlink_msg_to_send_buffer(buf, &_bleMsg);
         _mavSerial.write(buf, len);
@@ -243,6 +251,24 @@ RelayChannel Mavlink::classifyRelay(uint16_t msgid) {
         case MAVLINK_MSG_ID_HOME_POSITION:
             return RelayChannel::TELEMETRY;
         case MAVLINK_MSG_ID_PARAM_VALUE:
+        // Mission-upload handshake: the vehicle drives this by asking for
+        // each item, then acking the finished upload. Both directions ride
+        // the settings channel, the same as PARAM_VALUE — the app's
+        // MissionController is the thing actually speaking the protocol,
+        // this is still just a relay. MISSION_REQUEST is the legacy
+        // (non-_INT) request some FC versions still send; honoured the same
+        // way. MISSION_CURRENT is relayed too so the app can eventually show
+        // which waypoint is active, though nothing reads it yet.
+        case MAVLINK_MSG_ID_MISSION_REQUEST_INT:
+        case MAVLINK_MSG_ID_MISSION_REQUEST:
+        case MAVLINK_MSG_ID_MISSION_ACK:
+        case MAVLINK_MSG_ID_MISSION_CURRENT:
+        // Download direction (app reads back the vehicle's stored mission):
+        // MISSION_COUNT/MISSION_ITEM_INT are the *vehicle's* answers here,
+        // the mirror image of the app sending them during upload — same
+        // msgids, opposite direction, both legitimately relayed.
+        case MAVLINK_MSG_ID_MISSION_COUNT:
+        case MAVLINK_MSG_ID_MISSION_ITEM_INT:
             return RelayChannel::SETTINGS_ACK;
         default:
             return RelayChannel::NONE;
@@ -252,11 +278,32 @@ RelayChannel Mavlink::classifyRelay(uint16_t msgid) {
 // Security boundary, not a convenience filter: this path forwards whatever the app
 // sends straight to the flight controller, so it is a tight allowlist. Anything that
 // could arm motors or change mode must go through the RC-override control path.
+//
+// MISSION_COUNT/MISSION_ITEM_INT let the app upload a waypoint list (the
+// pencil tool) or a single point (the goto/dot tool — just a one-item
+// mission, there is no separate wire format for it). MISSION_CLEAR_ALL lets
+// it explicitly discard a mission without uploading a replacement.
+// MISSION_REQUEST_LIST/MISSION_REQUEST_INT/MISSION_ACK let the app read the
+// mission back (MISSION_REQUEST_INT and MISSION_ACK are also part of the
+// *upload* handshake in the other direction — same msgids the app sends
+// during download, the vehicle sends during upload — see classifyRelay's
+// comment). None of this starts the vehicle moving or changes its mode —
+// MAV_CMD_DO_SET_MODE stays off this allowlist, so actually driving a
+// mission is still only reachable through the boat's own mode selector
+// (HELM's MANUAL/LOITER/RTL, over the RC-override control characteristic),
+// same as arming already works. Uploading/reading a mission and running it
+// are different, deliberately separated actions.
 bool Mavlink::isAllowedFromApp(uint16_t msgid) {
     switch (msgid) {
         case MAVLINK_MSG_ID_PARAM_SET:
         case MAVLINK_MSG_ID_PARAM_REQUEST_READ:
         case MAVLINK_MSG_ID_PARAM_REQUEST_LIST:
+        case MAVLINK_MSG_ID_MISSION_COUNT:
+        case MAVLINK_MSG_ID_MISSION_ITEM_INT:
+        case MAVLINK_MSG_ID_MISSION_CLEAR_ALL:
+        case MAVLINK_MSG_ID_MISSION_REQUEST_LIST:
+        case MAVLINK_MSG_ID_MISSION_REQUEST_INT:
+        case MAVLINK_MSG_ID_MISSION_ACK:
             return true;
         default:
             return false;
