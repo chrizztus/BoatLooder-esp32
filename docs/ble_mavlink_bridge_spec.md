@@ -165,11 +165,13 @@ explicit enables per the rate table below (same
 | `VIBRATION` | 0.5 Hz |
 | `GLOBAL_POSITION_INT` | 1 Hz |
 | `HOME_POSITION` | 0.2 Hz (simplest for v1 — every 5s; an event-triggered refresh on reconnect/RTL-entry is a later optimization, not required now) |
+| `STATUSTEXT` | event-driven, not polled — ArduPilot pushes it unprompted whenever it has something to say. Nothing here requests it via `MAV_CMD_SET_MESSAGE_INTERVAL`; it just isn't dropped anymore. This is the only channel that carries *why* an arm attempt was refused ("PreArm: GPS 1: Bad fix", "PreArm: EKF3 not healthy", ...) — without it the app can see that arming failed but not say what to fix. |
 
 `PARAM_VALUE` isn't in this table — it's response-driven (arrives
 because something requested it), not a periodic stream.
 
-`classifyRelay()`:
+`classifyRelay()` (mission-upload/-download cases omitted here for
+brevity — see the source):
 
 ```cpp
 Mavlink::RelayChannel Mavlink::classifyRelay(uint16_t msgid) {
@@ -182,6 +184,7 @@ Mavlink::RelayChannel Mavlink::classifyRelay(uint16_t msgid) {
         case MAVLINK_MSG_ID_VIBRATION:
         case MAVLINK_MSG_ID_GLOBAL_POSITION_INT:
         case MAVLINK_MSG_ID_HOME_POSITION:
+        case MAVLINK_MSG_ID_STATUSTEXT:
             return RelayChannel::TELEMETRY;
         case MAVLINK_MSG_ID_PARAM_VALUE:
             return RelayChannel::SETTINGS_ACK;

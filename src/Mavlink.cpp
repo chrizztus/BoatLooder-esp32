@@ -249,6 +249,14 @@ RelayChannel Mavlink::classifyRelay(uint16_t msgid) {
         case MAVLINK_MSG_ID_VIBRATION:
         case MAVLINK_MSG_ID_GLOBAL_POSITION_INT:
         case MAVLINK_MSG_ID_HOME_POSITION:
+        // Unlike the rest of this list, never requested via
+        // MAV_CMD_SET_MESSAGE_INTERVAL -- ArduPilot pushes STATUSTEXT
+        // unprompted whenever it has something to say, prearm-check
+        // failures included ("PreArm: GPS 1: Bad fix", "PreArm: EKF3 not
+        // healthy", ...). Dropping it here (the previous behaviour: it
+        // fell through to the default/NONE case) meant the app had no way
+        // to show *why* an arm attempt was refused, only that it was.
+        case MAVLINK_MSG_ID_STATUSTEXT:
             return RelayChannel::TELEMETRY;
         case MAVLINK_MSG_ID_PARAM_VALUE:
         // Mission-upload handshake: the vehicle drives this by asking for
