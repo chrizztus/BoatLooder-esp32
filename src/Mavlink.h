@@ -92,6 +92,23 @@ public:
     /// Call periodically; cheap and self-disarming once every stream is live.
     void ensureStreamsFlowing();
     void sendRcOverrides(const uint16_t* pulses);
+    /// Sets the vehicle's flight mode via a real MAVLink command
+    /// (MAV_CMD_DO_SET_MODE), not the RC-channel-emulation trick
+    /// sendRcOverrides() uses for throttle/rudder/arm. ArduPilot decodes an
+    /// RC-channel mode change from configurable, ambiguous PWM bands; a
+    /// real command is unambiguous. No COMMAND_ACK relay back to the app is
+    /// needed for this -- the app's own mode selector already confirms
+    /// against HEARTBEAT.custom_mode, the vehicle's own report of what mode
+    /// it is actually in, regardless of how that mode was requested.
+    ///
+    /// This is not a gap in isAllowedFromApp()'s allowlist (see that
+    /// function's comment on MAV_CMD_DO_SET_MODE): that allowlist governs
+    /// raw MAVLink messages the *app* supplies on the settings channel. This
+    /// method is the ESP32 constructing its own command from an opaque
+    /// control-frame byte the app sends over the separate control
+    /// characteristic -- the same trust model requestMessageInterval()
+    /// already uses to speak MAVLink on its own initiative.
+    void setMode(uint8_t modeId);
     uint16_t getThrottlePulseUs(void);
     uint16_t getSteeringPulseUs(void);
     bool haveHeartbeat(void);

@@ -96,10 +96,21 @@ void BluetoothHandler::init() {
 
     BLEService *pService = pServer->createService(SERVICE_UUID);
 
+    // PROPERTY_WRITE_NR (write-without-response) alongside PROPERTY_WRITE:
+    // this one characteristic now carries two frame shapes with
+    // deliberately different delivery guarantees -- axis updates
+    // (throttle/rudder) go without response since a dropped one is
+    // superseded by the next drag update moments later, command updates
+    // (mode/arm) go with response since a dropped one-shot command has
+    // nothing else to resend it. Without PROPERTY_WRITE_NR declared here,
+    // any without-response write throws on the Android/flutter_blue_plus
+    // side before it ever reaches this peripheral -- confirmed the hard
+    // way (see the app's BleController for the exact PlatformException).
     BLECharacteristic *pCharacteristic = pService->createCharacteristic(
                                           CHARACTERISTIC_UUID,
                                           BLECharacteristic::PROPERTY_READ |
-                                          BLECharacteristic::PROPERTY_WRITE
+                                          BLECharacteristic::PROPERTY_WRITE |
+                                          BLECharacteristic::PROPERTY_WRITE_NR
                                         );
 
     pCharacteristic->setCallbacks(new BoatLuderCallbacks(this));

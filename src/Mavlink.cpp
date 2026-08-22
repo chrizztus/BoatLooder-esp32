@@ -136,6 +136,26 @@ void Mavlink::sendRcOverrides(const uint16_t *pulses){
     _mavSerial.write(buf, len);
 }
 
+void Mavlink::setMode(uint8_t modeId){
+    mavlink_message_t msg;
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+
+    // Same pack/send shape as requestMessageInterval() below -- a command
+    // the ESP32 constructs and sends on its own initiative, not a relay of
+    // anything the app supplied directly.
+    mavlink_msg_command_long_pack(MAVLINK_LOCAL_SYSTEM_ID,
+                                  MAVLINK_LOCAL_COMPONENT_ID,
+                                  &msg,
+                                  MAVLINK_TARGET_SYSTEM_ID,
+                                  MAVLINK_TARGET_COMPONENT_ID,
+                                  MAV_CMD_DO_SET_MODE, 0,
+                                  MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, modeId,
+                                  0, 0, 0, 0, 0);
+
+    uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    _mavSerial.write(buf, len);
+}
+
 uint16_t Mavlink::getThrottlePulseUs(void){
   return _servoOutThrottle;
 }

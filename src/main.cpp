@@ -292,14 +292,34 @@ void loop() {
 
 ///////////////// CALLBACKS /////////////////
 
+// Two 3-byte frame shapes share this characteristic, told apart by the
+// leading tag byte -- both are the same length, so length alone can't
+// distinguish them. 0x01 is an axis update (throttle/rudder, sent on every
+// drag update, compact int8s so it can go out without waiting for a GATT
+// response). 0x02 is a command update (mode/arm, sent only on a deliberate
+// change, written with response since a dropped one-shot command has
+// nothing else to resend it). See boatlooder-app's BleController for the
+// encoding this decodes.
 void onBluetoothWrite(const uint8_t* data, size_t length) {
-    //LOG_DEBUGF("Received %d bytes via BLE\n", length);
-    if(length == 8){
-      rcChannels[0] = data[2] << 8 | data[3]; // channel1 (roll)
-      rcChannels[1] = 1500;                   // constant value (pitch)
-      rcChannels[2] = data[4] << 8 | data[5]; // channel3 (throttle)
-      rcChannels[3] = data[6] << 8 | data[7]; // channel4 (arm/disarm)
-      rcChannels[4] = data[0] << 8 | data[1]; // channel5 (mode)
+    if (length != 3) return;
+
+    switch (data[0]) {
+      case 0x01: { // axis: throttle_pct (int8 -100..100), rudder_deg (int8 -90..90)
+        int8_t throttlePercent = (int8_t)data[1];
+        int8_t rudderDeg = (int8_t)data[2];
+        rcChannels[0] = map(throttlePercent, -100, 100, PWM_MIN, PWM_MAX); // throttle
+        rcChannels[2] = map(rudderDeg, -90, 90, PWM_MIN, PWM_MAX);         // rudder
+        break;
+      }
+      case 0x02: { // command: mode_id (ArduPilot custom_mode), arm_state (0/1)
+        uint8_t modeId = data[1];
+        uint8_t armState = data[2];
+        rcChannels[3] = armState ? PWM_MAX : PWM_MIN; // arm/disarm -- still an RC override
+        mavlink.setMode(modeId);                       // mode -- a real MAVLink command now
+        break;
+      }
+      default:
+        break; // unrecognized tag
     }
 }
 
@@ -348,7 +368,11 @@ void initRcChannels() {
     rcChannels[i] = 1500;
   }
   rcChannels[3] = 1100; //disarmed
-  rcChannels[4] = 1100; //manual mode
+  // rcChannels[4] (the old mode channel) stays at the neutral 1500 the loop
+  // above already gave it -- mode now goes out via Mavlink::setMode()'s
+  // real MAV_CMD_DO_SET_MODE, not by simulating an RC channel PWM band, so
+  // this slot is permanently inert. Left in the fixed 5-channel array
+  // rather than removed; sendRcOverrides() still expects 5 pulses.
 }
 
 // currently unused
