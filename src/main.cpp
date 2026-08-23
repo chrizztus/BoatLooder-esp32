@@ -6,13 +6,16 @@
 #include "BluetoothHandler.h"
 #include "Mavlink.h"
 #include "OtaUpdate.h"
+#include "VesselConfig.h"
+#include "motor_drivers/MotorDriverBackend.h"
+#include "motor_drivers/MotorDriverRegistry.h"
 #include "Logger.h"
 
 // Bump on every firmware release pushed over OTA -- reported on the
 // ota_version characteristic (see BluetoothHandler::init), and what the
 // app's OtaController compares against its own bundled version to decide
 // "up to date" (exact string match, no semver parsing -- see that file).
-#define FIRMWARE_VERSION "1.0.0"
+#define FIRMWARE_VERSION "1.1.0"
 
 // TMC2225
 #define EN_PIN                     23
@@ -34,29 +37,12 @@
 #define STEPS_FOR_90_DEGREES       ((int)(((ROTATION_ANGLE_MAX / MOTOR_ANGLE_PER_STEP) * MICROSTEPS * MOTOR_GEAR_RATIO) + 0.5f))
 
 // general defines
-#define PWM_MID                    1500
-#define PWM_MIN                    1100
-#define PWM_MAX                    1900
-
-// define motor driver
-//#define DRIVER_POLULU_18V17
-#define DRIVER_BTS7960
-
-// motor driver pin defines
-#ifdef DRIVER_POLULU_18V17
-#define MOTOR_DIR_PIN              21
-#define MOTOR_PWM_PIN              19
-#elif defined(DRIVER_BTS7960)
-#define MOTOR_PWM1_PIN             21
-#define MOTOR_PWM2_PIN             22
-#define MOTOR_EN_PIN               19
-#endif
+// PWM_MID/PWM_MIN/PWM_MAX/MOTOR_DEADBAND now live in
+// motor_drivers/MotorDriverBackend.h -- shared between main.cpp and every
+// backend .cpp. Which motor driver is active is a runtime choice now
+// (VesselConfig, see below), not a compile-time #define -- both backends
+// are always compiled in, see motor_drivers/.
 //#define CURRENT_SENSE_PIN 34
-
-#define MOTOR_DEADBAND             20
-#define MOTOR_LOWER_BOUND          (PWM_MID - MOTOR_DEADBAND)
-#define MOTOR_UPPER_BOUND          (PWM_MID + MOTOR_DEADBAND)
-
 
 // rc settings
 #define NUM_RC_CHANNELS            5
@@ -82,12 +68,19 @@ uint16_t rcChannels[NUM_RC_CHANNELS];
 // OTA firmware update state machine -- see OtaUpdate.h.
 OtaUpdate otaUpdate;
 
+// Persisted vessel name + motor driver choice -- see VesselConfig.h.
+VesselConfig vesselConfig;
+
+// The motor driver backend thrustControlTask is currently driving --
+// global (not local to that task) so onBluetoothDisconnect() can also
+// reach it to zero the motor on a dropped link, the same way it always
+// has. Only thrustControlTask ever changes which backend this points at.
+MotorDriverBackend* activeMotorDriver = nullptr;
+
 // function prototypes
 // (the Arduino IDE used to generate these implicitly from the .ino file)
 int pwmToSteps(int pwm);
 void initRcChannels();
-void setupMotorPWM();
-void setMotorSpeed(int motorPulse);
 void stepperControlTask(void *pvParameters);
 void thrustControlTask(void *pvParameters);
 void processMavlinkTask(void *pvParameters);
@@ -95,6 +88,7 @@ void statusLedTask(void *parameter);
 void onBluetoothWrite(const uint8_t* data, size_t length);
 void onBluetoothOtaControlWrite(const uint8_t* data, size_t length);
 void onBluetoothOtaDataWrite(const uint8_t* data, size_t length);
+void onBluetoothVesselConfigWrite(const uint8_t* data, size_t length);
 void rebootTask(void *pvParameters);
 void onBluetoothSettingsWrite(const uint8_t* data, size_t length);
 void onBluetoothConnect();
@@ -129,73 +123,32 @@ void stepperControlTask(void *pvParameters) {
   }
 }
 
-// thrust control 
-void setupMotorPWM() {
-#ifdef DRIVER_POLULU_18V17
-  LOG_INFO("Initializing pins for POLULU 18v17 Driver");
-  pinMode(MOTOR_DIR_PIN, OUTPUT);
-  pinMode(MOTOR_PWM_PIN, OUTPUT);
-  ledcAttachChannel(MOTOR_PWM_PIN, 20000, 9, 0);
-  ledcWrite(MOTOR_PWM_PIN, 0);
-#elif defined(DRIVER_BTS7960)
-  LOG_INFO("Initializing pins for BTS7960 Driver");
-  pinMode(MOTOR_EN_PIN, OUTPUT);
-  pinMode(MOTOR_PWM1_PIN, OUTPUT);
-  pinMode(MOTOR_PWM2_PIN, OUTPUT);
-  
-  digitalWrite(MOTOR_EN_PIN, HIGH);
-
-  ledcAttachChannel(MOTOR_PWM1_PIN, 20000, 9, 0);
-  ledcAttachChannel(MOTOR_PWM2_PIN, 20000, 9, 1);
-  ledcWrite(MOTOR_PWM2_PIN, 0);
-#endif
-}
-
-void setMotorSpeed(int motorPulse) {
-  bool direction = motorPulse > PWM_MID;
-  int speed;
-  
-#ifdef DRIVER_POLULU_18V17
-  digitalWrite(MOTOR_DIR_PIN, direction ? HIGH : LOW);
-  if (direction) {
-    speed = map(motorPulse, PWM_MID, PWM_MAX, 0, 512);
-  } else {
-    speed = map(motorPulse, PWM_MID, PWM_MIN, 0, 512);
-  }
-  speed = constrain(speed, 0, 512);
-  if (motorPulse > (PWM_MID - MOTOR_DEADBAND) && motorPulse < (PWM_MID + MOTOR_DEADBAND)) {
-    speed = 0;
-  }
-  ledcWrite(MOTOR_PWM_PIN, speed);
-
-#elif defined(DRIVER_BTS7960)
-  if (motorPulse > (PWM_MID + MOTOR_DEADBAND)) {
-    ledcWrite(MOTOR_PWM1_PIN, 0);
-    speed = map(motorPulse, PWM_MID, PWM_MAX, 0, 512);
-    speed = constrain(speed, 0, 512);
-    ledcWrite(MOTOR_PWM2_PIN, speed);
-  } else if (motorPulse < (PWM_MID - MOTOR_DEADBAND)) {
-    ledcWrite(MOTOR_PWM2_PIN, 0);
-    speed = map(motorPulse, PWM_MID, PWM_MIN, 0, 512);
-    speed = constrain(speed, 0, 512);
-    ledcWrite(MOTOR_PWM1_PIN, speed);
-  } else {
-    ledcWrite(MOTOR_PWM1_PIN, 0);
-    ledcWrite(MOTOR_PWM2_PIN, 0);
-  }
-#endif
-}
-
+// thrust control -- driver choice is a runtime value (vesselConfig,
+// checked every loop below), not compiled in. See motor_drivers/.
 void thrustControlTask(void *pvParameters) {
   int lastThrustPulseUs = 1500;
-  setupMotorPWM();
+  activeMotorDriver = getMotorDriverBackend(vesselConfig.currentMotorDriver());
+  activeMotorDriver->begin();
 
   while (1) {
+    // A driver change from a SET_DRIVER write (VesselConfig::setMotorDriver(),
+    // already gated on disarmed there) is picked up here, not applied from
+    // the BLE callback's own context -- this task is the one place that
+    // owns motor output, so the actual pin reconfiguration only ever runs
+    // here. Quiesce -> detach -> reconfigure -> attach, via end()/begin().
+    MotorDriverType desired = vesselConfig.currentMotorDriver();
+    if (desired != activeMotorDriver->type()) {
+      LOG_INFOF("Switching motor driver to %s\n", getMotorDriverBackend(desired)->name());
+      activeMotorDriver->end();
+      activeMotorDriver = getMotorDriverBackend(desired);
+      activeMotorDriver->begin();
+    }
+
     int thrustPulseUs = mavlink.getThrottlePulseUs();
     //LOG_DEBUGF("Thrust: %d\n", thrustPulseUs);
 
     if(thrustPulseUs != lastThrustPulseUs){
-      setMotorSpeed(thrustPulseUs);
+      activeMotorDriver->setSpeed(thrustPulseUs);
       lastThrustPulseUs = thrustPulseUs;
     }
 
@@ -259,6 +212,12 @@ void setup() {
   mavlink.init();
   initRcChannels();
 
+  // Loads the persisted name/driver choice before anything reads them --
+  // in particular, thrustControlTask (started below) reads
+  // vesselConfig.currentMotorDriver() the moment it starts running on its
+  // own core, which can happen before the rest of setup() continues.
+  vesselConfig.init();
+
   // stepper driver initialization
   TMC_SERIAL_PORT.begin(115200, SERIAL_8N1, 16, 17);
   while(!TMC_SERIAL_PORT);
@@ -284,12 +243,19 @@ void setup() {
   xTaskCreatePinnedToCore(thrustControlTask, "Control Thrust Motor", 4096, NULL, 1, NULL, 0);
   xTaskCreatePinnedToCore(processMavlinkTask, "Process Mavlink", 4096, NULL, 1, NULL, 0);
 
-  btHandler.init(FIRMWARE_VERSION);  // Initialize Bluetooth
+  // Full advertised name = APP_FILTER_PREFIX "@" + the persisted (or
+  // default) bare vessel name -- see VesselConfig.h. boatlooder-app's
+  // BleController.deviceNamePrefix must match APP_FILTER_PREFIX exactly.
+  String deviceName = String(APP_FILTER_PREFIX) + "@" + vesselConfig.currentName();
+  btHandler.init(FIRMWARE_VERSION, deviceName.c_str());  // Initialize Bluetooth
+  btHandler.setVesselInfo(vesselConfig.currentName().c_str(),
+                           getMotorDriverBackend(vesselConfig.currentMotorDriver())->name());
   // set bluetooth callbacks
   btHandler.setOnWriteCallback(onBluetoothWrite);
   btHandler.setOnSettingsWriteCallback(onBluetoothSettingsWrite);
   btHandler.setOnOtaControlWriteCallback(onBluetoothOtaControlWrite);
   btHandler.setOnOtaDataWriteCallback(onBluetoothOtaDataWrite);
+  btHandler.setOnVesselConfigWriteCallback(onBluetoothVesselConfigWrite);
   btHandler.setOnConnectCallback(onBluetoothConnect);
   btHandler.setOnDisconnectCallback(onBluetoothDisconnect);
 
@@ -313,6 +279,32 @@ void setup() {
   otaUpdate.setOnErrorCallback([](OtaError error) {
     uint8_t frame[2] = {0x03, (uint8_t)error};
     btHandler.notifyOtaControl(frame, sizeof(frame));
+  });
+  // VesselConfig knows nothing about BLE -- wire its outcomes to
+  // vessel_config notify frames here, same shape as OtaUpdate's wiring
+  // above. Keep boatlooder-app's VesselConfigController in sync with any
+  // change here.
+  vesselConfig.setOnNameOkCallback([]() {
+    uint8_t frame[1] = {0x01};
+    btHandler.notifyVesselConfig(frame, sizeof(frame));
+    // Keep vessel_info's READ value in sync -- the *advertised* BLE name
+    // stays whatever it was at this boot (BLEDevice::init() only runs
+    // once), but vessel_info's "name=" field should reflect the new
+    // value immediately, same as the app's own rename field does, with
+    // "applied on next boot" being about the advertised name specifically.
+    btHandler.setVesselInfo(vesselConfig.currentName().c_str(),
+                             getMotorDriverBackend(vesselConfig.currentMotorDriver())->name());
+  });
+  vesselConfig.setOnDriverOkCallback([]() {
+    uint8_t frame[1] = {0x02};
+    btHandler.notifyVesselConfig(frame, sizeof(frame));
+    // Keep vessel_info's READ value in sync with a live driver switch too.
+    btHandler.setVesselInfo(vesselConfig.currentName().c_str(),
+                             getMotorDriverBackend(vesselConfig.currentMotorDriver())->name());
+  });
+  vesselConfig.setOnErrorCallback([](VesselConfigError error) {
+    uint8_t frame[2] = {0x03, (uint8_t)error};
+    btHandler.notifyVesselConfig(frame, sizeof(frame));
   });
   // relay mavlink coming off the UART out to the app
   mavlink.setOnTelemetryRelayCallback([](const uint8_t* data, size_t len) {
@@ -392,6 +384,30 @@ void onBluetoothOtaControlWrite(const uint8_t* data, size_t length) {
     }
 }
 
+// SET_NAME/SET_DRIVER on vessel_config -- see VesselConfig.h for the frame
+// layout this decodes and boatlooder-app's VesselConfigController for the
+// sending side.
+void onBluetoothVesselConfigWrite(const uint8_t* data, size_t length) {
+    if (length < 1) return;
+
+    switch (data[0]) {
+      case 0x01: { // SET_NAME: nameLen (u8), nameBytes[nameLen]
+        if (length < 2) return;
+        uint8_t nameLen = data[1];
+        if (length < (size_t)(2 + nameLen)) return;
+        vesselConfig.setName(data + 2, nameLen);
+        break;
+      }
+      case 0x02: { // SET_DRIVER: driverId (u8)
+        if (length < 2) return;
+        vesselConfig.setMotorDriver(data[1], mavlink.isArmed());
+        break;
+      }
+      default:
+        break; // unrecognized tag
+    }
+}
+
 // Raw firmware bytes -- fed straight to OtaUpdate in the order received.
 // No framing of its own: write-with-response already serializes delivery
 // order (see BluetoothHandler's ota_data characteristic doc comment).
@@ -423,12 +439,9 @@ void onBluetoothDisconnect() {
 
     initRcChannels(); //set all channels to < 900us to trigger failsage
     stepper.disableOutputs();
-#ifdef DRIVER_POLULU_18V17
-  ledcWrite(MOTOR_PWM_PIN, 0);
-#elif defined(DRIVER_BTS7960)
-  ledcWrite(MOTOR_PWM1_PIN, 0);
-  ledcWrite(MOTOR_PWM2_PIN, 0);
-#endif
+    if (activeMotorDriver != nullptr) {
+      activeMotorDriver->setSpeed(PWM_MID); // neutral -- zero speed on whichever driver is active
+    }
 }
 
 ///////////////// HELPER /////////////////

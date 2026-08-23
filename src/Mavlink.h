@@ -47,6 +47,7 @@ class Mavlink {
 private:
     // variables
     volatile uint16_t _servoOutThrottle, _servoOutSteering;
+    volatile bool _armed;
     unsigned long _lastHeartbeat;
     // TODO: dead — allocated and filled in init(), never read. sendRcOverrides()
     // packs the caller's array instead. Either drop it, or move ownership of the
@@ -83,7 +84,7 @@ private:
 
 public:
     Mavlink(uint8_t numChannels, uint8_t mavUart)
-        : _streamSeenMask(0), _streamRetryRounds(0), _lastStreamCheck(0),
+        : _armed(false), _streamSeenMask(0), _streamRetryRounds(0), _lastStreamCheck(0),
           _streamGapReported(false), _rcChannels(numChannels), _mavSerial(mavUart) {}
     void init();
     void setupStreamingRates();
@@ -112,6 +113,10 @@ public:
     uint16_t getThrottlePulseUs(void);
     uint16_t getSteeringPulseUs(void);
     bool haveHeartbeat(void);
+    // HEARTBEAT.base_mode's MAV_MODE_FLAG_SAFETY_ARMED bit, decoded in
+    // handleReceivedByte() -- the real safety boundary VesselConfig's
+    // setMotorDriver() gates on, not just an app-side disabled control.
+    bool isArmed(void) const;
     void processReceivedPackets();
 
     // Setters

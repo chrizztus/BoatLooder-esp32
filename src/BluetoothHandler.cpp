@@ -14,6 +14,10 @@
 #define OTA_VERSION_CHARACTERISTIC_UUID "c91a5c87-d8cc-44ba-b8f7-5ddde24493bf"
 #define OTA_CONTROL_CHARACTERISTIC_UUID "37ede416-4d9e-48c9-afdb-587f726b4658"
 #define OTA_DATA_CHARACTERISTIC_UUID    "fe5f1b67-8505-4ab6-b40f-246abea4c93d"
+// Vessel identity/config -- see VesselConfig.h for the protocol these two
+// carry (vessel_info/vessel_config).
+#define VESSEL_INFO_CHARACTERISTIC_UUID   "8a2b9e3f-6c1d-4f5a-9b3e-1d7c4a8f2e6b"
+#define VESSEL_CONFIG_CHARACTERISTIC_UUID "b6d4f1a2-3e8c-47b9-a5d6-2f9e8c1b4a7d"
 
 // MTU we ask the peer for. The negotiated value is the min of both sides' asks,
 // so never assume this landed -- usableChunkSize() reads back what we actually got.
@@ -100,6 +104,22 @@ public:
     }
 };
 
+// Mirrors OtaControlCallbacks -- routes vessel_config frames
+// (SET_NAME/SET_DRIVER) to their own callback.
+class VesselConfigCallbacks: public BLECharacteristicCallbacks {
+    BluetoothHandler* handler;
+public:
+    VesselConfigCallbacks(BluetoothHandler* handler) : handler(handler) {}
+
+    void onWrite(BLECharacteristic *pCharacteristic) {
+      const uint8_t* data = pCharacteristic->getData();
+      size_t length = pCharacteristic->getLength();
+      if (length > 0 && handler->getOnVesselConfigWriteCallback()) {
+          handler->getOnVesselConfigWriteCallback()(data, length);
+      }
+    }
+};
+
 class ServerCallbacks: public BLEServerCallbacks {
     BluetoothHandler* handler;
 public:
@@ -123,11 +143,11 @@ public:
 
 BluetoothHandler::BluetoothHandler()
     : _settingsAckQueue(nullptr), _telemetryChar(nullptr), _settingsChar(nullptr),
-      _otaControlChar(nullptr) {}
+      _otaControlChar(nullptr), _vesselInfoChar(nullptr), _vesselConfigChar(nullptr) {}
 
-void BluetoothHandler::init(const char* firmwareVersion) {
+void BluetoothHandler::init(const char* firmwareVersion, const char* deviceName) {
     LOG_INFO("BT HANLDER INIT :: START");
-    BLEDevice::init(DEVICE_NAME);
+    BLEDevice::init(deviceName);
     // Must come *after* init(): this library version rejects setMTU() before
     // the BLE stack is up ("BLE is not initialized"), which silently left the
     // link at the 23-byte default MTU. Verified on hardware -- the spec's
@@ -223,6 +243,27 @@ void BluetoothHandler::init(const char* firmwareVersion) {
                                        );
     pOtaDataChar->setCallbacks(new OtaDataCallbacks(this));
 
+    // Vessel identity/config -- see VesselConfig.h for the protocol.
+    // vessel_info's actual content is set by setVesselInfo() (called from
+    // main.cpp, which is what has vesselConfig's bare name and the active
+    // driver's label -- this class doesn't reach into VesselConfig
+    // directly) -- never rewritten after that; a renamed vessel only
+    // takes effect on the next boot, i.e. the next call to init().
+    // vessel_config carries tag-prefixed SET_NAME/SET_DRIVER frames in and
+    // NAME_OK/DRIVER_OK/ERROR notifies out, same shape ota_control uses.
+    _vesselInfoChar = pService->createCharacteristic(
+                         VESSEL_INFO_CHARACTERISTIC_UUID,
+                         BLECharacteristic::PROPERTY_READ
+                       );
+
+    _vesselConfigChar = pService->createCharacteristic(
+                           VESSEL_CONFIG_CHARACTERISTIC_UUID,
+                           BLECharacteristic::PROPERTY_WRITE |
+                           BLECharacteristic::PROPERTY_NOTIFY
+                         );
+    _vesselConfigChar->addDescriptor(new BLE2902());
+    _vesselConfigChar->setCallbacks(new VesselConfigCallbacks(this));
+
     pService->start();
 
     _settingsAckQueue = xQueueCreate(SETTINGS_ACK_QUEUE_DEPTH, sizeof(SettingsAck));
@@ -260,6 +301,11 @@ void BluetoothHandler::setOnOtaDataWriteCallback(OnOtaDataWriteCallback callback
     this->_onOtaDataWriteCallback = callback;
 }
 
+void BluetoothHandler::setOnVesselConfigWriteCallback(OnVesselConfigWriteCallback callback) {
+    LOG_DEBUG("BT HANLDER VESSEL CONFIG WRITE CB");
+    this->_onVesselConfigWriteCallback = callback;
+}
+
 void BluetoothHandler::setOnConnectCallback(OnConnectCallback callback) {
     LOG_DEBUG("BT HANLDER CONNECT CB");
     this->_onConnectCallback = callback;
@@ -285,6 +331,10 @@ OnOtaControlWriteCallback BluetoothHandler::getOnOtaControlWriteCallback() const
 
 OnOtaDataWriteCallback BluetoothHandler::getOnOtaDataWriteCallback() const {
     return this->_onOtaDataWriteCallback;
+}
+
+OnVesselConfigWriteCallback BluetoothHandler::getOnVesselConfigWriteCallback() const {
+    return this->_onVesselConfigWriteCallback;
 }
 
 OnConnectCallback BluetoothHandler::getOnConnectCallback() const {
@@ -345,6 +395,22 @@ void BluetoothHandler::notifyOtaControl(const uint8_t* data, size_t length) {
     }
     _otaControlChar->setValue((uint8_t*)data, length);
     _otaControlChar->notify();
+}
+
+void BluetoothHandler::notifyVesselConfig(const uint8_t* data, size_t length) {
+    if (_vesselConfigChar == nullptr || !this->_isConnected) {
+        return;
+    }
+    _vesselConfigChar->setValue((uint8_t*)data, length);
+    _vesselConfigChar->notify();
+}
+
+void BluetoothHandler::setVesselInfo(const char* vesselName, const char* driverName) {
+    if (_vesselInfoChar == nullptr) {
+        return;
+    }
+    String info = "name=" + String(vesselName) + ";driver=" + String(driverName);
+    _vesselInfoChar->setValue(info.c_str());
 }
 
 void BluetoothHandler::notifySettings(const uint8_t* data, size_t length) {

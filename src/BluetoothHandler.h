@@ -8,12 +8,6 @@
 #include <BLEUtils.h>
 #include <BLEServer.h>
 
-#define STR_HELPER(x) #x
-#define STR(x) STR_HELPER(x)
-#define BOATLUDER BoatLuder@
-#define BL_NAME chr!zz+us //  ТОППОФ
-#define DEVICE_NAME STR(BOATLUDER) STR(BL_NAME)
-
 // Longest frame the settings channel ever carries (PARAM_VALUE serializes to
 // 37 bytes); sized with headroom rather than MAVLINK_MAX_PACKET_LEN so the
 // outbound queue stays small.
@@ -30,22 +24,27 @@ typedef std::function<void(const uint8_t* data, size_t length)> OnWriteCallback;
 typedef std::function<void(const uint8_t* data, size_t length)> OnSettingsWriteCallback;
 typedef std::function<void(const uint8_t* data, size_t length)> OnOtaControlWriteCallback;
 typedef std::function<void(const uint8_t* data, size_t length)> OnOtaDataWriteCallback;
+typedef std::function<void(const uint8_t* data, size_t length)> OnVesselConfigWriteCallback;
 typedef std::function<void()> OnConnectCallback;
 typedef std::function<void()> OnDisconnectCallback;
 
 class BluetoothHandler {
 public:
     BluetoothHandler();
-    // [firmwareVersion] becomes ota_version's fixed value -- set once here,
-    // never rewritten, since it's only ever the running firmware's own
-    // compile-time version (see main.cpp's FIRMWARE_VERSION).
-    void init(const char* firmwareVersion);
+    // [firmwareVersion] becomes ota_version's fixed value; [deviceName] is
+    // the full advertised name (APP_FILTER_PREFIX "@" + VesselConfig's
+    // currentName(), composed by main.cpp) -- both set once here, never
+    // rewritten. A renamed vessel only takes effect on the next call to
+    // init(), i.e. the next boot -- see VesselConfig::setName()'s doc
+    // comment for why this is deliberately not live.
+    void init(const char* firmwareVersion, const char* deviceName);
 
     // Setters
     void setOnWriteCallback(OnWriteCallback callback);
     void setOnSettingsWriteCallback(OnSettingsWriteCallback callback);
     void setOnOtaControlWriteCallback(OnOtaControlWriteCallback callback);
     void setOnOtaDataWriteCallback(OnOtaDataWriteCallback callback);
+    void setOnVesselConfigWriteCallback(OnVesselConfigWriteCallback callback);
     void setOnConnectCallback(OnConnectCallback callback);
     void setOnDisconnectCallback(OnDisconnectCallback callback);
 
@@ -56,6 +55,7 @@ public:
     OnSettingsWriteCallback getOnSettingsWriteCallback() const;
     OnOtaControlWriteCallback getOnOtaControlWriteCallback() const;
     OnOtaDataWriteCallback getOnOtaDataWriteCallback() const;
+    OnVesselConfigWriteCallback getOnVesselConfigWriteCallback() const;
     OnConnectCallback getOnConnectCallback() const;
     OnDisconnectCallback getOnDisconnectCallback() const;
 
@@ -70,6 +70,18 @@ public:
     // the frame layout. Always tiny (<=2 bytes), never needs the chunking
     // notifyTelemetry/notifySettings do.
     void notifyOtaControl(const uint8_t* data, size_t length);
+
+    // NAME_OK/DRIVER_OK/ERROR frames on vessel_config -- see VesselConfig.h
+    // for the frame layout. Same size/queueing characteristics as
+    // notifyOtaControl.
+    void notifyVesselConfig(const uint8_t* data, size_t length);
+
+    // Sets vessel_info's READ value -- called once from main.cpp right
+    // after init(), which is what actually has VesselConfig's bare name
+    // and the active MotorDriverBackend's label; this class doesn't reach
+    // into VesselConfig directly, same separation OtaUpdate/BluetoothHandler
+    // already have.
+    void setVesselInfo(const char* vesselName, const char* driverName);
 
 private:
     // usable payload per PDU for the current connection (negotiated MTU - 3 ATT bytes)
@@ -90,14 +102,17 @@ private:
 
     BLECharacteristic* _telemetryChar;
     BLECharacteristic* _settingsChar;
-    // ota_data has no stored pointer -- nothing ever notifies on it, only
-    // ota_control does (ACK/OK/ERROR), so only that one needs to survive
-    // past init().
+    // ota_data/vessel_info have no stored pointer -- nothing ever notifies
+    // on them, so only the two notify-carrying characteristics need to
+    // survive past init().
     BLECharacteristic* _otaControlChar;
+    BLECharacteristic* _vesselInfoChar;
+    BLECharacteristic* _vesselConfigChar;
     OnWriteCallback _onWriteCallback;
     OnSettingsWriteCallback _onSettingsWriteCallback;
     OnOtaControlWriteCallback _onOtaControlWriteCallback;
     OnOtaDataWriteCallback _onOtaDataWriteCallback;
+    OnVesselConfigWriteCallback _onVesselConfigWriteCallback;
     OnConnectCallback _onConnectCallback;
     OnDisconnectCallback _onDisconnectCallback;
 };

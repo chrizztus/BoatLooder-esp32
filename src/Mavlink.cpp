@@ -165,8 +165,12 @@ uint16_t Mavlink::getSteeringPulseUs(void){
 }
 
 bool Mavlink::haveHeartbeat(void){
-  unsigned long now = millis(); 
+  unsigned long now = millis();
   return (_lastHeartbeat != 0) && (now - _lastHeartbeat) < MAVLINK_HEARTBEAT_TIMEOUT_MS;
+}
+
+bool Mavlink::isArmed(void) const {
+  return _armed;
 }
 
 void Mavlink::setOnTelemetryRelayCallback(OnRelayCallback callback) {
@@ -219,6 +223,9 @@ void Mavlink::handleReceivedByte(uint8_t byte) {
 
         if (_msg.msgid == MAVLINK_MSG_ID_HEARTBEAT) {
             _lastHeartbeat = millis();
+            mavlink_heartbeat_t heartbeat;
+            mavlink_msg_heartbeat_decode(&_msg, &heartbeat);
+            _armed = (heartbeat.base_mode & MAV_MODE_FLAG_SAFETY_ARMED) != 0;
         }
 
         // Relay is purely msgid-driven: the already-validated frame is re-serialized

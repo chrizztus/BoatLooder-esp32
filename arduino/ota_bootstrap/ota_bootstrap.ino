@@ -22,9 +22,13 @@
 #include <Update.h>
 
 // Same device name and service the real firmware advertises under
-// (BluetoothHandler.h/.cpp) -- the app finds a vessel by name prefix
-// regardless of which firmware (bootstrap or real) is currently running.
-#define DEVICE_NAME "BoatLuder@chr!zz+us"
+// (BluetoothHandler.h/VesselConfig.h's APP_FILTER_PREFIX/DEFAULT_VESSEL_NAME)
+// -- the app finds a vessel by name prefix regardless of which firmware
+// (bootstrap or real) is currently running. This sketch has no rename
+// persistence of its own (deliberately minimal), so it always advertises
+// the default name -- a rename only takes effect once the real firmware
+// is installed.
+#define DEVICE_NAME "boatlooder@boatlooder"
 #define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 
 // Identical to BluetoothHandler.cpp's OTA_*_CHARACTERISTIC_UUID defines.
