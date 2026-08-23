@@ -6,6 +6,14 @@
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 #define TELEMETRY_CHARACTERISTIC_UUID "430f885a-4c7b-40c6-bdfc-280a526fd118"
 #define SETTINGS_CHARACTERISTIC_UUID  "5cf3acbf-4809-453a-93ab-4359429056e3"
+// OTA firmware update -- see OtaUpdate.h for the protocol these three
+// carry (ota_version/ota_control/ota_data). The bootstrap sketch
+// (arduino/ota_bootstrap/) exposes the exact same three UUIDs and nothing
+// else, so their absence here is itself part of how the app tells "no
+// real firmware yet" apart from "up to date" / "outdated".
+#define OTA_VERSION_CHARACTERISTIC_UUID "c91a5c87-d8cc-44ba-b8f7-5ddde24493bf"
+#define OTA_CONTROL_CHARACTERISTIC_UUID "37ede416-4d9e-48c9-afdb-587f726b4658"
+#define OTA_DATA_CHARACTERISTIC_UUID    "fe5f1b67-8505-4ab6-b40f-246abea4c93d"
 
 // MTU we ask the peer for. The negotiated value is the min of both sides' asks,
 // so never assume this landed -- usableChunkSize() reads back what we actually got.
@@ -58,6 +66,40 @@ public:
     }
 };
 
+// Mirrors BoatLuderCallbacks/SettingsCallbacks -- routes ota_control
+// frames (BEGIN/END/ABORT) to their own callback.
+class OtaControlCallbacks: public BLECharacteristicCallbacks {
+    BluetoothHandler* handler;
+public:
+    OtaControlCallbacks(BluetoothHandler* handler) : handler(handler) {}
+
+    void onWrite(BLECharacteristic *pCharacteristic) {
+      const uint8_t* data = pCharacteristic->getData();
+      size_t length = pCharacteristic->getLength();
+      if (length > 0 && handler->getOnOtaControlWriteCallback()) {
+          handler->getOnOtaControlWriteCallback()(data, length);
+      }
+    }
+};
+
+// ota_data's raw firmware chunks -- same NUL-truncation trap the other
+// two callbacks guard against (getData()/getLength(), not getValue()),
+// doubly so here: a firmware image is far more likely to contain zero
+// bytes than a MAVLink frame or a control tag ever was.
+class OtaDataCallbacks: public BLECharacteristicCallbacks {
+    BluetoothHandler* handler;
+public:
+    OtaDataCallbacks(BluetoothHandler* handler) : handler(handler) {}
+
+    void onWrite(BLECharacteristic *pCharacteristic) {
+      const uint8_t* data = pCharacteristic->getData();
+      size_t length = pCharacteristic->getLength();
+      if (length > 0 && handler->getOnOtaDataWriteCallback()) {
+          handler->getOnOtaDataWriteCallback()(data, length);
+      }
+    }
+};
+
 class ServerCallbacks: public BLEServerCallbacks {
     BluetoothHandler* handler;
 public:
@@ -80,9 +122,10 @@ public:
 };
 
 BluetoothHandler::BluetoothHandler()
-    : _settingsAckQueue(nullptr), _telemetryChar(nullptr), _settingsChar(nullptr) {}
+    : _settingsAckQueue(nullptr), _telemetryChar(nullptr), _settingsChar(nullptr),
+      _otaControlChar(nullptr) {}
 
-void BluetoothHandler::init() {
+void BluetoothHandler::init(const char* firmwareVersion) {
     LOG_INFO("BT HANLDER INIT :: START");
     BLEDevice::init(DEVICE_NAME);
     // Must come *after* init(): this library version rejects setMTU() before
@@ -94,7 +137,18 @@ void BluetoothHandler::init() {
 
     pServer->setCallbacks(new ServerCallbacks(this));
 
-    BLEService *pService = pServer->createService(SERVICE_UUID);
+    // Explicit handle count, not the char*-uuid overload's implicit
+    // default of 15: each characteristic costs >=2 GATT attribute handles
+    // (declaration + value), +1 more for each BLE2902 descriptor (3 of
+    // this service's 6 characteristics have one), +1 for the service
+    // declaration itself -- this service needs 16 at the count when the
+    // OTA characteristics were added, one over that default. Found the
+    // hard way: the *last* characteristic created past the limit
+    // (ota_data) simply never showed up over BLE, no error anywhere --
+    // the two before it (ota_version, ota_control) worked fine, which is
+    // what actually pointed at a handle-table overflow rather than a
+    // per-characteristic bug. 40 leaves real headroom for whatever's next.
+    BLEService *pService = pServer->createService(BLEUUID(SERVICE_UUID), 40);
 
     // PROPERTY_WRITE_NR (write-without-response) alongside PROPERTY_WRITE:
     // this one characteristic now carries two frame shapes with
@@ -141,6 +195,34 @@ void BluetoothHandler::init() {
     _settingsChar->addDescriptor(new BLE2902());
     _settingsChar->setCallbacks(new SettingsCallbacks(this));
 
+    // OTA firmware update -- see OtaUpdate.h for the protocol. ota_version
+    // is set once here and never rewritten (it's just this running
+    // firmware's own compile-time version); ota_control carries tag-
+    // prefixed BEGIN/END/ABORT frames in and ACK/OK/ERROR notifies out,
+    // the same shape the control characteristic already uses for its own
+    // tag byte; ota_data is write-with-response (not _NR) -- correctness
+    // over latency for a firmware chunk, same reasoning the settings
+    // characteristic already uses for MAVLink param/mission writes.
+    BLECharacteristic *pOtaVersionChar = pService->createCharacteristic(
+                                            OTA_VERSION_CHARACTERISTIC_UUID,
+                                            BLECharacteristic::PROPERTY_READ
+                                          );
+    pOtaVersionChar->setValue(firmwareVersion);
+
+    _otaControlChar = pService->createCharacteristic(
+                         OTA_CONTROL_CHARACTERISTIC_UUID,
+                         BLECharacteristic::PROPERTY_WRITE |
+                         BLECharacteristic::PROPERTY_NOTIFY
+                       );
+    _otaControlChar->addDescriptor(new BLE2902());
+    _otaControlChar->setCallbacks(new OtaControlCallbacks(this));
+
+    BLECharacteristic *pOtaDataChar = pService->createCharacteristic(
+                                         OTA_DATA_CHARACTERISTIC_UUID,
+                                         BLECharacteristic::PROPERTY_WRITE
+                                       );
+    pOtaDataChar->setCallbacks(new OtaDataCallbacks(this));
+
     pService->start();
 
     _settingsAckQueue = xQueueCreate(SETTINGS_ACK_QUEUE_DEPTH, sizeof(SettingsAck));
@@ -168,6 +250,16 @@ void BluetoothHandler::setOnSettingsWriteCallback(OnSettingsWriteCallback callba
     this->_onSettingsWriteCallback = callback;
 }
 
+void BluetoothHandler::setOnOtaControlWriteCallback(OnOtaControlWriteCallback callback) {
+    LOG_DEBUG("BT HANLDER OTA CONTROL WRITE CB");
+    this->_onOtaControlWriteCallback = callback;
+}
+
+void BluetoothHandler::setOnOtaDataWriteCallback(OnOtaDataWriteCallback callback) {
+    LOG_DEBUG("BT HANLDER OTA DATA WRITE CB");
+    this->_onOtaDataWriteCallback = callback;
+}
+
 void BluetoothHandler::setOnConnectCallback(OnConnectCallback callback) {
     LOG_DEBUG("BT HANLDER CONNECT CB");
     this->_onConnectCallback = callback;
@@ -185,6 +277,14 @@ OnWriteCallback BluetoothHandler::getOnWriteCallback() const {
 
 OnSettingsWriteCallback BluetoothHandler::getOnSettingsWriteCallback() const {
     return this->_onSettingsWriteCallback;
+}
+
+OnOtaControlWriteCallback BluetoothHandler::getOnOtaControlWriteCallback() const {
+    return this->_onOtaControlWriteCallback;
+}
+
+OnOtaDataWriteCallback BluetoothHandler::getOnOtaDataWriteCallback() const {
+    return this->_onOtaDataWriteCallback;
 }
 
 OnConnectCallback BluetoothHandler::getOnConnectCallback() const {
@@ -233,6 +333,18 @@ void BluetoothHandler::notifyTelemetry(const uint8_t* data, size_t length) {
             delay(RELAY_CHUNK_PACING_MS);
         }
     }
+}
+
+// ACK/OK/ERROR are all <=2 bytes -- always fits one PDU, no chunking or
+// queueing needed (unlike notifyTelemetry/notifySettings, which exist for
+// exactly that reason). NOTIFY, not INDICATE, so there's no blocking
+// confirmation to worry about either.
+void BluetoothHandler::notifyOtaControl(const uint8_t* data, size_t length) {
+    if (_otaControlChar == nullptr || !this->_isConnected) {
+        return;
+    }
+    _otaControlChar->setValue((uint8_t*)data, length);
+    _otaControlChar->notify();
 }
 
 void BluetoothHandler::notifySettings(const uint8_t* data, size_t length) {

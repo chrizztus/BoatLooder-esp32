@@ -5,7 +5,14 @@
 #include <freertos/task.h>
 #include "BluetoothHandler.h"
 #include "Mavlink.h"
+#include "OtaUpdate.h"
 #include "Logger.h"
+
+// Bump on every firmware release pushed over OTA -- reported on the
+// ota_version characteristic (see BluetoothHandler::init), and what the
+// app's OtaController compares against its own bundled version to decide
+// "up to date" (exact string match, no semver parsing -- see that file).
+#define FIRMWARE_VERSION "1.0.0"
 
 // TMC2225
 #define EN_PIN                     23
@@ -72,6 +79,9 @@ BluetoothHandler btHandler;
 Mavlink mavlink(NUM_RC_CHANNELS, MAVLINK_UART);
 uint16_t rcChannels[NUM_RC_CHANNELS];
 
+// OTA firmware update state machine -- see OtaUpdate.h.
+OtaUpdate otaUpdate;
+
 // function prototypes
 // (the Arduino IDE used to generate these implicitly from the .ino file)
 int pwmToSteps(int pwm);
@@ -83,6 +93,9 @@ void thrustControlTask(void *pvParameters);
 void processMavlinkTask(void *pvParameters);
 void statusLedTask(void *parameter);
 void onBluetoothWrite(const uint8_t* data, size_t length);
+void onBluetoothOtaControlWrite(const uint8_t* data, size_t length);
+void onBluetoothOtaDataWrite(const uint8_t* data, size_t length);
+void rebootTask(void *pvParameters);
 void onBluetoothSettingsWrite(const uint8_t* data, size_t length);
 void onBluetoothConnect();
 void onBluetoothDisconnect();
@@ -271,12 +284,36 @@ void setup() {
   xTaskCreatePinnedToCore(thrustControlTask, "Control Thrust Motor", 4096, NULL, 1, NULL, 0);
   xTaskCreatePinnedToCore(processMavlinkTask, "Process Mavlink", 4096, NULL, 1, NULL, 0);
 
-  btHandler.init();  // Initialize Bluetooth
+  btHandler.init(FIRMWARE_VERSION);  // Initialize Bluetooth
   // set bluetooth callbacks
   btHandler.setOnWriteCallback(onBluetoothWrite);
   btHandler.setOnSettingsWriteCallback(onBluetoothSettingsWrite);
+  btHandler.setOnOtaControlWriteCallback(onBluetoothOtaControlWrite);
+  btHandler.setOnOtaDataWriteCallback(onBluetoothOtaDataWrite);
   btHandler.setOnConnectCallback(onBluetoothConnect);
   btHandler.setOnDisconnectCallback(onBluetoothDisconnect);
+
+  // OtaUpdate knows nothing about BLE -- wire its outcomes to
+  // ota_control notify frames here. ACK/OK/ERROR match OtaUpdate.h's
+  // doc comment on the wire layout; keep boatlooder-app's OtaController
+  // in sync with any change here.
+  otaUpdate.setOnAckCallback([]() {
+    uint8_t frame[1] = {0x01};
+    btHandler.notifyOtaControl(frame, sizeof(frame));
+  });
+  otaUpdate.setOnOkCallback([]() {
+    uint8_t frame[1] = {0x02};
+    btHandler.notifyOtaControl(frame, sizeof(frame));
+    // Reboot off a separate task, not inline here: notify() only queues
+    // the packet, it doesn't wait for the radio to actually send it --
+    // restarting synchronously in this same callback risks tearing the
+    // BLE stack down before that last notify ever goes out.
+    xTaskCreate(rebootTask, "reboot", 2048, nullptr, 1, nullptr);
+  });
+  otaUpdate.setOnErrorCallback([](OtaError error) {
+    uint8_t frame[2] = {0x03, (uint8_t)error};
+    btHandler.notifyOtaControl(frame, sizeof(frame));
+  });
   // relay mavlink coming off the UART out to the app
   mavlink.setOnTelemetryRelayCallback([](const uint8_t* data, size_t len) {
     btHandler.notifyTelemetry(data, len);
@@ -331,6 +368,45 @@ void onBluetoothSettingsWrite(const uint8_t* data, size_t length) {
     }
 }
 
+// BEGIN/END/ABORT on ota_control -- see OtaUpdate.h for the frame layout
+// this decodes and boatlooder-app's OtaController for the sending side.
+void onBluetoothOtaControlWrite(const uint8_t* data, size_t length) {
+    if (length < 1) return;
+
+    switch (data[0]) {
+      case 0x01: { // BEGIN: size (u32 LE), verLen (u8), verBytes[verLen] -- version unused here, logged only
+        if (length < 5) return;
+        uint32_t size = (uint32_t)data[1] | ((uint32_t)data[2] << 8) |
+                         ((uint32_t)data[3] << 16) | ((uint32_t)data[4] << 24);
+        otaUpdate.begin(size);
+        break;
+      }
+      case 0x02: // END
+        otaUpdate.end();
+        break;
+      case 0x03: // ABORT
+        otaUpdate.abort();
+        break;
+      default:
+        break; // unrecognized tag
+    }
+}
+
+// Raw firmware bytes -- fed straight to OtaUpdate in the order received.
+// No framing of its own: write-with-response already serializes delivery
+// order (see BluetoothHandler's ota_data characteristic doc comment).
+void onBluetoothOtaDataWrite(const uint8_t* data, size_t length) {
+    otaUpdate.writeChunk(data, length);
+}
+
+// Gives the OK notify a moment to actually clear the BLE link before
+// tearing the stack down for the reboot -- see where this is spawned in
+// setup().
+void rebootTask(void *pvParameters) {
+    vTaskDelay(pdMS_TO_TICKS(500));
+    ESP.restart();
+}
+
 void onBluetoothConnect() {
     LOG_INFO("BLE device connected");
     stepper.enableOutputs();
@@ -338,6 +414,12 @@ void onBluetoothConnect() {
 
 void onBluetoothDisconnect() {
     LOG_INFO("BLE device disconnected");
+
+    // A dropped link mid-transfer must not leave a half-written image
+    // sitting in the inactive OTA slot looking like it could still be
+    // finished later -- see OtaUpdate::abort()'s doc comment. No-op if
+    // nothing was in progress.
+    otaUpdate.abort();
 
     initRcChannels(); //set all channels to < 900us to trigger failsage
     stepper.disableOutputs();
